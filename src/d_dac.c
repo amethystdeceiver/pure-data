@@ -8,6 +8,16 @@
 #include "m_pd.h"
 #include "s_stuff.h"
 
+#ifdef __APPLE__
+#import "TargetConditionals.h"
+#if TARGET_OS_IPHONE
+#import <Accelerate/Accelerate.h>
+#define USE_APPLE_ACCELERATE
+#define USE_MEMCPY
+#include "string.h"
+#endif
+#endif
+
 /* ----------------------------- dac~ --------------------------- */
 static t_class *dac_class;
 
@@ -115,7 +125,12 @@ t_int *copy_perf8(t_int *w)
     t_sample *in1 = (t_sample *)(w[1]);
     t_sample *out = (t_sample *)(w[2]);
     int n = (int)(w[3]);
-    
+#ifdef USE_MEMCPY
+    memcpy(out, in1, n * sizeof(t_sample));
+#else
+#ifdef USE_APPLE_ACCELERATE
+    cblas_scopy(n, in1, 1, out, 1);
+#else
     for (; n; n -= 8, in1 += 8, out += 8)
     {
         t_sample f0 = in1[0];
@@ -136,6 +151,8 @@ t_int *copy_perf8(t_int *w)
         out[6] = f6;
         out[7] = f7;
     }
+#endif
+#endif
     return (w+4);
 }
 

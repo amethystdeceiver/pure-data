@@ -9,6 +9,14 @@
 #include "m_pd.h"
 #include "math.h"
 
+#ifdef __APPLE__
+#import "TargetConditionals.h"
+#if TARGET_OS_IPHONE
+#import <Accelerate/Accelerate.h>
+#define USE_APPLE_ACCELERATE
+#endif
+#endif
+
 /* -------------------------- sig~ ------------------------------ */
 static t_class *sig_tilde_class;
 
@@ -23,8 +31,12 @@ static t_int *sig_tilde_perform(t_int *w)
     t_float f = *(t_float *)(w[1]);
     t_sample *out = (t_sample *)(w[2]);
     int n = (int)(w[3]);
+#ifdef USE_APPLE_ACCELERATE
+    vDSP_vfill(&f, out, 1, n);
+#else
     while (n--)
-        *out++ = f; 
+        *out++ = f;
+#endif
     return (w+4);
 }
 
@@ -50,10 +62,14 @@ static t_int *sig_tilde_perf8(t_int *w)
 
 void dsp_add_scalarcopy(t_float *in, t_sample *out, int n)
 {
+#ifdef USE_APPLE_ACCELERATE
+    dsp_add(sig_tilde_perform, 3, in, out, n);
+#else
     if (n&7)
         dsp_add(sig_tilde_perform, 3, in, out, n);
     else        
         dsp_add(sig_tilde_perf8, 3, in, out, n);
+#endif
 }
 
 static void sig_tilde_float(t_sig *x, t_float f)
@@ -122,15 +138,23 @@ static t_int *line_tilde_perform(t_int *w)
     if (x->x_ticksleft)
     {
         t_sample f = x->x_value;
+#ifdef USE_APPLE_ACCELERATE
+        vDSP_vramp(&f, &x->x_inc, out, 1, n);
+#else
         while (n--) *out++ = f, f += x->x_inc;
+#endif
         x->x_value += x->x_biginc;
         x->x_ticksleft--;
     }
     else
     {
         t_sample g = x->x_value = x->x_target;
+#ifdef USE_APPLE_ACCELERATE
+        vDSP_vfill(&g, out, 1, n);
+#else
         while (n--)
             *out++ = g;
+#endif
     }
     return (w+4);
 }
@@ -197,10 +221,14 @@ static void line_tilde_stop(t_line *x)
 
 static void line_tilde_dsp(t_line *x, t_signal **sp)
 {
+#ifdef USE_APPLE_ACCELERATE
+    dsp_add(line_tilde_perform, 3, x, sp[0]->s_vec, sp[0]->s_n);
+#else
     if(sp[0]->s_n&7)
         dsp_add(line_tilde_perform, 3, x, sp[0]->s_vec, sp[0]->s_n);
     else
         dsp_add(line_tilde_perf8, 3, x, sp[0]->s_vec, sp[0]->s_n);
+#endif
     x->x_1overn = 1./sp[0]->s_n;
     x->x_dspticktomsec = sp[0]->s_sr / (1000 * sp[0]->s_n);
 }

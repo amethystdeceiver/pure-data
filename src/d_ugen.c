@@ -16,6 +16,14 @@
 #include <stdlib.h>
 #include <stdarg.h>
 
+#ifdef __APPLE__
+#import "TargetConditionals.h"
+#if TARGET_OS_IPHONE
+#import <Accelerate/Accelerate.h>
+#define USE_APPLE_ACCELERATE
+#endif
+#endif
+
 extern t_class *vinlet_class, *voutlet_class, *canvas_class;
 t_float *obj_findsignalscalar(t_object *x, int m);
 static int ugen_loud;
@@ -37,7 +45,11 @@ t_int *zero_perform(t_int *w)   /* zero out a vector */
 {
     t_sample *out = (t_sample *)(w[1]);
     int n = (int)(w[2]);
-    while (n--) *out++ = 0; 
+#ifdef USE_APPLE_ACCELERATE
+    vDSP_vclr(out, 1, n);
+#else
+    while (n--) *out++ = 0;
+#endif
     return (w+3);
 }
 
@@ -62,10 +74,14 @@ t_int *zero_perf8(t_int *w)
 
 void dsp_add_zero(t_sample *out, int n)
 {
+#ifdef USE_APPLE_ACCELERATE
+    dsp_add(zero_perform, 2, out, n);
+#else
     if (n&7)
         dsp_add(zero_perform, 2, out, n);
     else        
         dsp_add(zero_perf8, 2, out, n);
+#endif
 }
 
 /* ---------------------------- block~ ----------------------------- */
