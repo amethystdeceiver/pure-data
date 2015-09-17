@@ -116,7 +116,11 @@ t_int *copy_perform(t_int *w)
     t_sample *in1 = (t_sample *)(w[1]);
     t_sample *out = (t_sample *)(w[2]);
     int n = (int)(w[3]);
-    while (n--) *out++ = *in1++; 
+#ifdef USE_MEMCPY
+    memcpy(out, in1, n * sizeof(t_sample));
+#else
+    while (n--) *out++ = *in1++;
+#endif
     return (w+4);
 }
 
@@ -125,12 +129,7 @@ t_int *copy_perf8(t_int *w)
     t_sample *in1 = (t_sample *)(w[1]);
     t_sample *out = (t_sample *)(w[2]);
     int n = (int)(w[3]);
-#ifdef USE_MEMCPY
-    memcpy(out, in1, n * sizeof(t_sample));
-#else
-#ifdef USE_APPLE_ACCELERATE
-    cblas_scopy(n, in1, 1, out, 1);
-#else
+
     for (; n; n -= 8, in1 += 8, out += 8)
     {
         t_sample f0 = in1[0];
@@ -151,17 +150,20 @@ t_int *copy_perf8(t_int *w)
         out[6] = f6;
         out[7] = f7;
     }
-#endif
-#endif
+
     return (w+4);
 }
 
 void dsp_add_copy(t_sample *in, t_sample *out, int n)
 {
+#ifdef USE_MEMCPY
+    dsp_add(copy_perform, 3, in, out, n);
+#else
     if (n&7)
         dsp_add(copy_perform, 3, in, out, n);
-    else        
+    else
         dsp_add(copy_perf8, 3, in, out, n);
+#endif
 }
 
 static void adc_dsp(t_adc *x, t_signal **sp)
