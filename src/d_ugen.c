@@ -21,7 +21,12 @@
 #if TARGET_OS_IPHONE
 #import <Accelerate/Accelerate.h>
 #define USE_APPLE_ACCELERATE
+//#define USE_MEMSET
 #endif
+#endif
+
+#ifdef USE_MEMSET
+#include <string.h>
 #endif
 
 extern t_class *vinlet_class, *voutlet_class, *canvas_class;
@@ -45,8 +50,14 @@ t_int *zero_perform(t_int *w)   /* zero out a vector */
 {
     t_sample *out = (t_sample *)(w[1]);
     int n = (int)(w[2]);
-#ifdef USE_APPLE_ACCELERATE
-    vDSP_vclr(out, 1, n);
+#ifdef USE_MEMSET
+    memset(out, 0, sizeof(t_sample) * n);
+#elifdef USE_APPLE_ACCELERATE
+    // vfill is actually marginally at least on iPad mini 1st gen (1.51 vs 1.55 sec per million blocks)
+    t_sample zero = 0;
+    vDSP_vfill(&zero, out, 1, n);
+    
+    //vDSP_vclr(out, 1, n);
 #else
     while (n--) *out++ = 0;
 #endif
