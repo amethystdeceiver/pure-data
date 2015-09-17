@@ -320,9 +320,55 @@ static t_int *sigvd_perform(t_int *w)
     t_sample fn = n-1;
     t_sample *vp = ctl->c_vec, *bp, *wp = vp + ctl->c_phase;
     t_sample zerodel = x->x_zerodel;
+    
+#if defined(USE_APPLE_ACCELERATE) && defined(USE_LINEAR_INTERPOLATION)
+    // NOTE: Would be good to double check this
+    t_sample minusZerodel = -zerodel;
+    t_sample lowerLimit = 1.00001f;
+    t_sample upperLimit = limit;
+    
+    t_sample delsampsArray[n], *delsampsPointer = delsampsArray;
+    
+    t_sample rampArray[n];
+    t_sample *rampp = rampArray;
+    t_sample rampStart = fn;
+    t_sample minusOne = -1.f;
+    vDSP_vramp(&rampStart, &minusOne, rampp, 1, n);
+    
+    vDSP_vsmsa(in, 1, &x->x_sr, &minusZerodel, delsampsArray, 1, n);
+    vDSP_vclip(delsampsArray, 1, &lowerLimit, &upperLimit, delsampsArray, 1, n);
+    vDSP_vadd(delsampsArray, 1, rampp, 1, delsampsArray, 1, n);
+    
+    int nn = n;
+    while (nn--) {
+        t_sample val = *delsampsPointer;
+        *delsampsPointer = ctl->c_phase - 1 - val;
+        if (*delsampsPointer < 1) {
+            *delsampsPointer += (float)nsamps;
+        }
+        delsampsPointer++;
+    }
+
+    vDSP_vlint(vp, delsampsArray, 1, out, 1, n, nsamps);
+#else
     while (n--)
     {
-#ifndef USE_LINEAR_INTERPOLATION
+#if defined(USE_LINEAR_INTERPOLATION)
+        t_sample delsamps = x->x_sr * *in++ - zerodel, frac;
+        int idelsamps;
+        t_sample a, b;
+        if (delsamps < 1.00001f) delsamps = 1.00001f;
+        if (delsamps > limit) delsamps = limit;
+        delsamps += fn;
+        fn = fn - 1.0f;
+        idelsamps = delsamps;
+        frac = delsamps - (t_sample)idelsamps;
+        bp = wp - idelsamps;
+        if (bp < vp + 2) bp += nsamps;
+        b = bp[-1];
+        a = bp[0];
+        *out++ = a + frac * (b - a);
+#else
         t_sample delsamps = x->x_sr * *in++ - zerodel, frac;
         int idelsamps;
         t_sample a, b, c, d, cminusb;
@@ -342,27 +388,14 @@ static t_int *sigvd_perform(t_int *w)
         a = bp[0];
         cminusb = c-b;
         *out++ = b + frac * (
-            cminusb - 0.1666667f * (1.-frac) * (
-                (d - a - 3.0f * cminusb) * frac + (d + 2.0f*a - 3.0f*b)
-            )
-        );
-#else
-        t_sample delsamps = x->x_sr * *in++ - zerodel, frac;
-        int idelsamps;
-        t_sample a, b;
-        if (delsamps < 1.00001f) delsamps = 1.00001f;
-        if (delsamps > limit) delsamps = limit;
-        delsamps += fn;
-        fn = fn - 1.0f;
-        idelsamps = delsamps;
-        frac = delsamps - (t_sample)idelsamps;
-        bp = wp - idelsamps;
-        if (bp < vp + 2) bp += nsamps;
-        b = bp[-1];
-        a = bp[0];
-        *out++ = a + frac * (b - a);
+                    cminusb - 0.1666667f * (1.-frac) * (
+                        (d - a - 3.0f * cminusb) * frac + (d + 2.0f*a - 3.0f*b)
+                            )
+                             );
+
 #endif
     }
+#endif
     return (w+6);
 }
 
