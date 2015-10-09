@@ -115,7 +115,7 @@ static t_int *sigreceive_perform(t_int *w)
     {
 #ifdef USE_MEMCPY
         // TODO: memcpy gain check?
-        memcpy(out, in, n * sizeof(t_sample));
+        memcpy(out, in, sizeof(t_sample) * n);
 #else
 #ifdef USE_APPLE_ACCELERATE
         cblas_scopy(n, in, 1, out, 1);
@@ -246,7 +246,12 @@ static t_int *sigcatch_perform(t_int *w)
     t_sample *in = (t_sample *)(w[1]);
     t_sample *out = (t_sample *)(w[2]);
     int n = (int)(w[3]);
-    while (n--) *out++ = *in, *in++ = 0; 
+#ifdef USE_APPLE_ACCELERATE
+    memcpy(out, in, sizeof(t_sample) * n);
+    memset(in, 0, sizeof(t_sample) * n);
+#else
+    while (n--) *out++ = *in, *in++ = 0;
+#endif
     return (w+4);
 }
 
@@ -255,8 +260,7 @@ static t_int *sigcatch_perf8(t_int *w)
 {
     t_sample *in = (t_sample *)(w[1]);
     t_sample *out = (t_sample *)(w[2]);
-    int n = (int)(w[3]);
-    // TODO: Accelerate.framework if needed    
+    int n = (int)(w[3]);  
     for (; n; n -= 8, in += 8, out += 8)
     {
        out[0] = in[0]; out[1] = in[1]; out[2] = in[2]; out[3] = in[3]; 
@@ -272,10 +276,14 @@ static void sigcatch_dsp(t_sigcatch *x, t_signal **sp)
 {
     if (x->x_n == sp[0]->s_n)
     {
+#ifdef USE_APPLE_ACCELERATE
+        dsp_add(sigcatch_perform, 3, x->x_vec, sp[0]->s_vec, sp[0]->s_n);
+#else
         if(sp[0]->s_n&7)
         dsp_add(sigcatch_perform, 3, x->x_vec, sp[0]->s_vec, sp[0]->s_n);
         else
         dsp_add(sigcatch_perf8, 3, x->x_vec, sp[0]->s_vec, sp[0]->s_n);
+#endif
     }
     else error("sigcatch %s: unexpected vector size", x->x_sym->s_name);
 }
@@ -325,12 +333,17 @@ static t_int *sigthrow_perform(t_int *w)
     t_sample *out = x->x_whereto;
     if (out)
     {
+#ifdef USE_APPLE_ACCELERATE
+        // Missng PD_BIGORSMALL checks, eh?
+        vDSP_vadd(out, 1, in, 1, out, 1, n);
+#else
         while (n--)
         {
             *out += (PD_BIGORSMALL(*in) ? 0 : *in);
             out++;
             in++;
         }
+#endif
     }
     return (w+4);
 }
