@@ -12,6 +12,14 @@ sends it on to the outlet proper.  Another way to do it would be to have
 separate classes for "signal" and "control" outlets, but this would complicate
 life elsewhere. */
 
+#ifdef __APPLE__
+#import "TargetConditionals.h"
+#if TARGET_OS_IPHONE
+#import <Accelerate/Accelerate.h>
+#define USE_APPLE_ACCELERATE
+#define USE_MEMCPY
+#endif
+#endif
 
 #include "m_pd.h"
 #include "g_canvas.h"
@@ -114,7 +122,13 @@ t_int *vinlet_perform(t_int *w)
     if (tot < 5) post("-buf %lx endbuf %lx", x->x_buf, x->x_endbuf);
     if (tot < 5) post("in[0] %f in[1] %f in[2] %f", in[0], in[1], in[2]);
 #endif
+#ifdef USE_MEMCPY
+    memcpy(out, in, sizeof(t_float) * n);
+    in += n;
+    out += n;
+#else
     while (n--) *out++ = *in++;
+#endif
     if (in == x->x_endbuf) in = x->x_buf;
     x->x_read = in;
     return (w+4);
@@ -157,7 +171,13 @@ t_int *vinlet_doprolog(t_int *w)
     if (tot < 5) post("in[0] %f in[1] %f in[2] %f", in[0], in[1], in[2]);
 #endif
 
+#ifdef USE_MEMCPY
+    memcpy(out, in, sizeof(t_float) * n);
+    out += n;
+    in += n;
+#else
     while (n--) *out++ = *in++;
+#endif
     x->x_fill = out;
     return (w+4);
 }
