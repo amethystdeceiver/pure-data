@@ -5,7 +5,7 @@
 /* this file calls Ross Bencina's and Phil Burk's Portaudio package.  It's
     the main way in for Mac OS and, with Michael Casey's help, also into
     ASIO in Windows.
-    
+
     Both blocking and non-blocking call styles are supported.  If non-blocking
     is requested, either we call portaudio in non-blocking mode, or else we
     call portaudio in callback mode and manage our own FIFO se we can offer
@@ -17,7 +17,7 @@
     and polling; the latter seems to work better so far.
 */
 
-/* dolist...  
+/* dolist...
     switch to usleep in s_inter.c
 */
 
@@ -26,30 +26,27 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <fcntl.h>
 #include <portaudio.h>
 
 #ifdef _MSC_VER
-#define snprintf sprintf_s
+#define snprintf _snprintf
 #endif
 
 #ifndef _WIN32          /* for the "dup2" workaround -- do we still need it? */
 #include <unistd.h>
 #endif
 
-#ifdef HAVE_ALLOCA_H        /* ifdef nonsense to find include for alloca() */
-# include <alloca.h>        /* linux, mac, mingw, cygwin */
-#elif defined _MSC_VER
-# include <malloc.h>        /* MSVC */
+#ifdef _WIN32
+# include <malloc.h> /* MSVC or mingw on windows */
+#elif defined(__linux__) || defined(__APPLE__)
+# include <alloca.h> /* linux, mac, mingw, cygwin */
 #else
-# include <stddef.h>        /* BSDs for example */
-#endif                      /* end alloca() ifdef nonsense */
+# include <stdlib.h> /* BSDs for example */
+#endif
 
 #if 1
 #define FAKEBLOCKING
-#endif
-
-#if defined (FAKEBLOCKING) && defined(_WIN32)
-#include <windows.h>    /* for Sleep() */
 #endif
 
 /* define this to enable thread signaling instead of polling */
@@ -78,8 +75,25 @@ static PA_VOLATILE char *pa_inbuf;
 static PA_VOLATILE sys_ringbuf pa_inring;
 #ifdef THREADSIGNAL
 #include <pthread.h>
-pthread_mutex_t pa_mutex;
-pthread_cond_t pa_sem;
+#ifdef _WIN32
+#include <sys/timeb.h>
+#else
+#include <sys/time.h>
+#endif
+/* maximum time (in ms) to wait for the condition variable. */
+#ifndef THREADSIGNAL_TIMEOUT
+#define THREADSIGNAL_TIMEOUT 1000
+#endif
+static pthread_mutex_t pa_mutex;
+static pthread_cond_t pa_sem;
+#else /* THREADSIGNAL */
+#if defined (FAKEBLOCKING) && defined(_WIN32)
+#include <windows.h>    /* for Sleep() */
+#endif
+/* max number of unsuccessful polls before trying to reopen the device */
+#ifndef MAX_NUM_POLLS
+#define MAX_NUM_POLLS 2000
+#endif
 #endif /* THREADSIGNAL */
 #endif  /* FAKEBLOCKING */
 
@@ -109,7 +123,7 @@ static void pa_init(void)        /* Initialize PortAudio  */
 #endif
 
 
-        if ( err != paNoError ) 
+        if ( err != paNoError )
         {
             post("Error opening audio: %s", err, Pa_GetErrorText(err));
             return;
@@ -120,10 +134,10 @@ static void pa_init(void)        /* Initialize PortAudio  */
 
 static int pa_lowlevel_callback(const void *inputBuffer,
     void *outputBuffer, unsigned long nframes,
-    const PaStreamCallbackTimeInfo *outTime, PaStreamCallbackFlags myflags, 
+    const PaStreamCallbackTimeInfo *outTime, PaStreamCallbackFlags myflags,
     void *userData)
 {
-    int i; 
+    int i;
     unsigned int n, j;
     float *fbuf, *fp2, *fp3, *soundiop;
     if (nframes % DEFDACBLKSIZE)
@@ -172,7 +186,7 @@ static int pa_lowlevel_callback(const void *inputBuffer,
     to poll for us; so far polling seems to work better. */
 static int pa_fifo_callback(const void *inputBuffer,
     void *outputBuffer, unsigned long nframes,
-    const PaStreamCallbackTimeInfo *outTime, PaStreamCallbackFlags myflags, 
+    const PaStreamCallbackTimeInfo *outTime, PaStreamCallbackFlags myflags,
     void *userData)
 {
     /* callback routine for non-callback client... throw samples into
@@ -182,7 +196,7 @@ static int pa_fifo_callback(const void *inputBuffer,
     float *fbuf;
 
 #if CHECKFIFOS
-    if (pa_inchans * sys_ringbuf_getreadavailable(&pa_outring) !=   
+    if (pa_inchans * sys_ringbuf_getreadavailable(&pa_outring) !=
         pa_outchans * sys_ringbuf_getwriteavailable(&pa_inring))
             post("warning: in and out rings unequal (%d, %d)",
                 sys_ringbuf_getreadavailable(&pa_outring),
@@ -241,7 +255,7 @@ PaError pa_open_callback(double sampleRate, int inchannels, int outchannels,
     instreamparams.channelCount = inchannels;
     instreamparams.sampleFormat = paFloat32;
     instreamparams.hostApiSpecificStreamInfo = 0;
-    
+
     outstreamparams.device = outdeviceno;
     outstreamparams.channelCount = outchannels;
     outstreamparams.sampleFormat = paFloat32;
@@ -319,7 +333,7 @@ PaError pa_open_callback(double sampleRate, int inchannels, int outchannels,
         pa_close_audio();
         goto error;
     }
-    sys_dacsr=sampleRate;
+    STUFF->st_dacsr=sampleRate;
     return paNoError;
 error:
     pa_stream = NULL;
@@ -332,12 +346,12 @@ int pa_open_audio(int inchans, int outchans, int rate, t_sample *soundin,
 {
     PaError err;
     int j, devno, pa_indev = -1, pa_outdev = -1;
-    
+
     pa_callback = callbackfn;
     /* fprintf(stderr, "open callback %d\n", (callbackfn != 0)); */
     pa_init();
     /* post("in %d out %d rate %d device %d", inchans, outchans, rate, deviceno); */
-    
+
     if (pa_stream)
         pa_close_audio();
 
@@ -359,8 +373,8 @@ int pa_open_audio(int inchans, int outchans, int rate, t_sample *soundin,
                 devno++;
             }
         }
-    }   
-    
+    }
+
     if (outchans > 0)
     {
         for (j = 0, devno = 0; j < Pa_GetDeviceCount(); j++)
@@ -379,13 +393,13 @@ int pa_open_audio(int inchans, int outchans, int rate, t_sample *soundin,
                 devno++;
             }
         }
-    }   
+    }
 
     if (inchans > 0 && pa_indev == -1)
         inchans = 0;
     if (outchans > 0 && pa_outdev == -1)
         outchans = 0;
-    
+
     if (sys_verbose)
     {
         post("input device %d, channels %d", pa_indev, inchans);
@@ -393,8 +407,8 @@ int pa_open_audio(int inchans, int outchans, int rate, t_sample *soundin,
         post("framesperbuf %d, nbufs %d", framesperbuf, nbuffers);
         post("rate %d", rate);
     }
-    pa_inchans = sys_inchannels = inchans;
-    pa_outchans = sys_outchannels = outchans;
+    pa_inchans = STUFF->st_inchannels = inchans;
+    pa_outchans = STUFF->st_outchannels = outchans;
     pa_soundin = soundin;
     pa_soundout = soundout;
 
@@ -403,11 +417,15 @@ int pa_open_audio(int inchans, int outchans, int rate, t_sample *soundin,
         free((char *)pa_inbuf), pa_inbuf = 0;
     if (pa_outbuf)
         free((char *)pa_outbuf), pa_outbuf = 0;
+#ifdef THREADSIGNAL
+    pthread_mutex_init(&pa_mutex, 0);
+    pthread_cond_init(&pa_sem, 0);
+#endif
 #endif
 
     if (! inchans && !outchans)
         return (0);
-    
+
     if (callbackfn)
     {
         pa_callback = callbackfn;
@@ -439,9 +457,9 @@ int pa_open_audio(int inchans, int outchans, int rate, t_sample *soundin,
     }
     pa_started = 0;
     pa_nbuffers = nbuffers;
-    if ( err != paNoError ) 
+    if ( err != paNoError )
     {
-        post("Error opening audio: %s", Pa_GetErrorText(err));
+        error("error opening audio: %s", Pa_GetErrorText(err));
         /* Pa_Terminate(); */
         return (1);
     }
@@ -463,6 +481,10 @@ void pa_close_audio( void)
         free((char *)pa_inbuf), pa_inbuf = 0;
     if (pa_outbuf)
         free((char *)pa_outbuf), pa_outbuf = 0;
+#ifdef THREADSIGNAL
+    pthread_mutex_destroy(&pa_mutex);
+    pthread_cond_destroy(&pa_sem);
+#endif
 #endif
 }
 
@@ -473,27 +495,58 @@ int pa_send_dacs(void)
     float *conversionbuf;
     int j, k;
     int rtnval =  SENDDACS_YES;
-#ifndef FAKEBLOCKING
+    int locked = 0;
+#ifdef FAKEBLOCKING
+#ifdef THREADSIGNAL
+    struct timespec ts;
+    double timeout;
+#ifdef _WIN32
+    struct __timeb64 tb;
+    _ftime64(&tb);
+    timeout = (double)tb.time + tb.millitm * 0.001;
+#else
+    struct timeval now;
+    gettimeofday(&now, 0);
+    timeout = (double)now.tv_sec + (1./1000000.) * now.tv_usec;
+#endif
+    timeout += THREADSIGNAL_TIMEOUT * 0.001;
+    ts.tv_sec = (long long)timeout;
+    ts.tv_nsec = (timeout - (double)ts.tv_sec) * 1e9;
+#else
+    int counter = MAX_NUM_POLLS;
+#endif /* THREADSIGNAL */
+#else
     double timebefore;
 #endif /* FAKEBLOCKING */
-    if (!sys_inchannels && !sys_outchannels || !pa_stream)
-        return (SENDDACS_NO); 
-    conversionbuf = (float *)alloca((sys_inchannels > sys_outchannels?
-        sys_inchannels:sys_outchannels) * DEFDACBLKSIZE * sizeof(float));
+    if ((!STUFF->st_inchannels && !STUFF->st_outchannels) || !pa_stream)
+        return (SENDDACS_NO);
+    conversionbuf = (float *)alloca((STUFF->st_inchannels > STUFF->st_outchannels?
+        STUFF->st_inchannels:STUFF->st_outchannels) * DEFDACBLKSIZE * sizeof(float));
 
 #ifdef FAKEBLOCKING
-    if (!sys_inchannels)    /* if no input channels sync on output */
+    if (!STUFF->st_inchannels)    /* if no input channels sync on output */
     {
 #ifdef THREADSIGNAL
         pthread_mutex_lock(&pa_mutex);
 #endif
         while (sys_ringbuf_getwriteavailable(&pa_outring) <
-            (long)(sys_outchannels * DEFDACBLKSIZE * sizeof(float)))
+            (long)(STUFF->st_outchannels * DEFDACBLKSIZE * sizeof(float)))
         {
             rtnval = SENDDACS_SLEPT;
 #ifdef THREADSIGNAL
-            pthread_cond_wait(&pa_sem, &pa_mutex);
+            if (pthread_cond_timedwait(&pa_sem, &pa_mutex, &ts) == ETIMEDOUT)
+            {
+                locked = 1;
+                break;
+            }
 #else
+            if (Pa_IsStreamActive(&pa_stream) < 0)
+                counter--;
+            if (!counter)
+            {
+                locked = 1;
+                break;
+            }
 #ifdef _WIN32
             Sleep(1);
 #else
@@ -506,28 +559,39 @@ int pa_send_dacs(void)
 #endif
     }
         /* write output */
-    if (sys_outchannels)
+    if (STUFF->st_outchannels && !locked)
     {
-        for (j = 0, fp = sys_soundout, fp2 = conversionbuf;
-            j < sys_outchannels; j++, fp2++)
+        for (j = 0, fp = STUFF->st_soundout, fp2 = conversionbuf;
+            j < STUFF->st_outchannels; j++, fp2++)
                 for (k = 0, fp3 = fp2; k < DEFDACBLKSIZE;
-                    k++, fp++, fp3 += sys_outchannels)
+                    k++, fp++, fp3 += STUFF->st_outchannels)
                         *fp3 = *fp;
         sys_ringbuf_write(&pa_outring, conversionbuf,
-            sys_outchannels*(DEFDACBLKSIZE*sizeof(float)), pa_outbuf);
+            STUFF->st_outchannels*(DEFDACBLKSIZE*sizeof(float)), pa_outbuf);
     }
-    if (sys_inchannels)    /* if there is input sync on it */
+    if (STUFF->st_inchannels)    /* if there is input sync on it */
     {
 #ifdef THREADSIGNAL
         pthread_mutex_lock(&pa_mutex);
 #endif
         while (sys_ringbuf_getreadavailable(&pa_inring) <
-            (long)(sys_inchannels * DEFDACBLKSIZE * sizeof(float)))
+            (long)(STUFF->st_inchannels * DEFDACBLKSIZE * sizeof(float)))
         {
             rtnval = SENDDACS_SLEPT;
 #ifdef THREADSIGNAL
-            pthread_cond_wait(&pa_sem, &pa_mutex);
+            if (pthread_cond_timedwait(&pa_sem, &pa_mutex, &ts) == ETIMEDOUT)
+            {
+                locked = 1;
+                break;
+            }
 #else
+            if (Pa_IsStreamActive(&pa_stream) < 0)
+                counter--;
+            if (!counter)
+            {
+                locked = 1;
+                break;
+            }
 #ifdef _WIN32
             Sleep(1);
 #else
@@ -539,44 +603,48 @@ int pa_send_dacs(void)
         pthread_mutex_unlock(&pa_mutex);
 #endif
     }
-    if (sys_inchannels)
+    if (STUFF->st_inchannels && !locked)
     {
         sys_ringbuf_read(&pa_inring, conversionbuf,
-            sys_inchannels*(DEFDACBLKSIZE*sizeof(float)), pa_inbuf);
-        for (j = 0, fp = sys_soundin, fp2 = conversionbuf;
-            j < sys_inchannels; j++, fp2++)
+            STUFF->st_inchannels*(DEFDACBLKSIZE*sizeof(float)), pa_inbuf);
+        for (j = 0, fp = STUFF->st_soundin, fp2 = conversionbuf;
+            j < STUFF->st_inchannels; j++, fp2++)
                 for (k = 0, fp3 = fp2; k < DEFDACBLKSIZE;
-                    k++, fp++, fp3 += sys_inchannels)
+                    k++, fp++, fp3 += STUFF->st_inchannels)
                         *fp = *fp3;
     }
 
 #else /* FAKEBLOCKING */
     timebefore = sys_getrealtime();
         /* write output */
-    if (sys_outchannels)
+    if (STUFF->st_outchannels)
     {
         if (!pa_started)
         {
             memset(conversionbuf, 0,
-                sys_outchannels * DEFDACBLKSIZE * sizeof(float));
+                STUFF->st_outchannels * DEFDACBLKSIZE * sizeof(float));
             for (j = 0; j < pa_nbuffers-1; j++)
                 Pa_WriteStream(pa_stream, conversionbuf, DEFDACBLKSIZE);
         }
-        for (j = 0, fp = sys_soundout, fp2 = conversionbuf;
-            j < sys_outchannels; j++, fp2++)
+        for (j = 0, fp = STUFF->st_soundout, fp2 = conversionbuf;
+            j < STUFF->st_outchannels; j++, fp2++)
                 for (k = 0, fp3 = fp2; k < DEFDACBLKSIZE;
-                    k++, fp++, fp3 += sys_outchannels)
+                    k++, fp++, fp3 += STUFF->st_outchannels)
                         *fp3 = *fp;
-        Pa_WriteStream(pa_stream, conversionbuf, DEFDACBLKSIZE);
+        if (Pa_WriteStream(pa_stream, conversionbuf, DEFDACBLKSIZE) != paNoError)
+            if (Pa_IsStreamActive(&pa_stream) < 0)
+                locked = 1;
     }
 
-    if (sys_inchannels)
+    if (STUFF->st_inchannels)
     {
-        Pa_ReadStream(pa_stream, conversionbuf, DEFDACBLKSIZE);
-        for (j = 0, fp = sys_soundin, fp2 = conversionbuf;
-            j < sys_inchannels; j++, fp2++)
+        if (Pa_ReadStream(pa_stream, conversionbuf, DEFDACBLKSIZE) != paNoError)
+            if (Pa_IsStreamActive(&pa_stream) < 0)
+                locked = 1;
+        for (j = 0, fp = STUFF->st_soundin, fp2 = conversionbuf;
+            j < STUFF->st_inchannels; j++, fp2++)
                 for (k = 0, fp3 = fp2; k < DEFDACBLKSIZE;
-                    k++, fp++, fp3 += sys_inchannels)
+                    k++, fp++, fp3 += STUFF->st_inchannels)
                         *fp = *fp3;
     }
     if (sys_getrealtime() - timebefore > 0.002)
@@ -586,13 +654,38 @@ int pa_send_dacs(void)
 #endif /* FAKEBLOCKING */
     pa_started = 1;
 
-    memset(sys_soundout, 0, DEFDACBLKSIZE*sizeof(t_sample)*sys_outchannels);
-    return (rtnval);
+    memset(STUFF->st_soundout, 0,
+        DEFDACBLKSIZE*sizeof(t_sample)*STUFF->st_outchannels);
+    if (locked)
+    {
+        PaError err = Pa_IsStreamActive(&pa_stream);
+        error("error %d: %s", err, Pa_GetErrorText(err));
+        sys_close_audio();
+        #ifdef __APPLE__
+            /* TODO: the portaudio coreaudio implementation doesn't handle
+               re-connection, so suggest restarting */
+            error("audio device not responding - closing audio");
+            error("you may need to save and restart pd");
+        #else
+            /* portaudio seems to handle this better on windows and linux */
+            error("trying to reopen audio device");
+            sys_reopen_audio(); /* try to reopen it */
+            if (audio_isopen())
+                error("successfully reopened audio device");
+            else
+                error("audio device not responding - closing audio");
+            #ifdef _WIN32
+                error("reconnect and try reselecting the device in the settings");
+            #endif
+        #endif
+        return SENDDACS_NO;
+    } else
+        return (rtnval);
 }
 
     /* scanning for devices */
 void pa_getdevs(char *indevlist, int *nindevs,
-    char *outdevlist, int *noutdevs, int *canmulti, 
+    char *outdevlist, int *noutdevs, int *canmulti,
         int maxndev, int devdescsize)
 {
     int i, nin = 0, nout = 0, ndev;

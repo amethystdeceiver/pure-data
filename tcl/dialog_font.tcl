@@ -7,7 +7,7 @@ namespace eval ::dialog_font:: {
     variable whichstretch 1
     variable canvaswindow
     variable sizes {8 10 12 16 24 36}
-    
+
     namespace export pdtk_canvas_dofont
 }
 
@@ -22,7 +22,20 @@ namespace eval ::dialog_font:: {
 
 proc ::dialog_font::apply {mytoplevel myfontsize} {
     if {$mytoplevel eq ".pdwindow"} {
-        .pdwindow.text configure -font "-size $myfontsize"
+        if {[lsearch [font names] TkTextFont] >= 0} {
+            font configure TkTextFont -size -$myfontsize
+        }
+        if {[lsearch [font names] TkDefaultFont] >= 0} {
+            font configure TkDefaultFont -size -$myfontsize
+        }
+        if {[lsearch [font names] TkMenuFont] >= 0} {
+            font configure TkMenuFont -size -$myfontsize
+        }
+        .pdwindow.text.internal configure -font "-size -$myfontsize"
+
+# repeat a "pack" command so the font dialog can resize itself
+        pack .font.buttonframe -side bottom -fill x -pady 2m
+
     } else {
         variable stretchval
         variable whichstretch
@@ -68,9 +81,11 @@ proc ::dialog_font::pdtk_canvas_dofont {gfxstub initsize} {
     variable fontsize $initsize
     variable whichstretch 1
     variable stretchval 100
+    if {$fontsize < 8} {set fontsize 12}
     if {[winfo exists .font]} {
         wm deiconify .font
         raise .font
+        focus .font
         # the gfxstub stuff expects multiple font windows, we only have one,
         # so kill the new gfxstub requests as the come in.  We'll save the
         # original gfxstub for when the font panel gets closed
@@ -85,7 +100,7 @@ proc ::dialog_font::create_dialog {gfxstub} {
     .font configure -menu $::dialog_menubar
     .font configure -padx 10 -pady 5
     wm group .font .
-    wm resizable .font 0 0
+    wm title .font [_ "Font"]
     wm transient .font $::focused_window
     ::pd_bindings::dialog_bindings .font "font"
     # replace standard bindings to work around the gfxstub stuff and use
@@ -97,17 +112,17 @@ proc ::dialog_font::create_dialog {gfxstub} {
     wm protocol .font WM_DELETE_WINDOW "dialog_font::cancel $gfxstub"
     bind .font <Up> "::dialog_font::arrow_fontchange -1"
     bind .font <Down> "::dialog_font::arrow_fontchange 1"
-    
+
     frame .font.buttonframe
-    pack .font.buttonframe -side bottom -fill x -pady 2m
+    pack .font.buttonframe -side bottom -pady 2m
     button .font.buttonframe.ok -text [_ "OK"] \
-        -command "::dialog_font::ok $gfxstub"
-    pack .font.buttonframe.ok -side left -expand 1
-    
+        -command "::dialog_font::ok $gfxstub" -default active
+    pack .font.buttonframe.ok -side left -expand 1 -fill x -ipadx 10
+
     labelframe .font.fontsize -text [_ "Font Size"] -padx 5 -pady 4 -borderwidth 1 \
         -width [::msgcat::mcmax "Font Size"] -labelanchor n
     pack .font.fontsize -side left -padx 5
-    
+
     # this is whacky Tcl at its finest, but I couldn't resist...
     foreach size $::dialog_font::sizes {
         radiobutton .font.fontsize.radio$size -value $size -text $size \
@@ -133,4 +148,15 @@ proc ::dialog_font::create_dialog {gfxstub} {
     pack .font.stretch.radio1 -side top -anchor w
     pack .font.stretch.radio2 -side top -anchor w
     pack .font.stretch.radio3 -side top -anchor w
+
+    # for focus handling on OSX
+    if {$::windowingsystem eq "aqua"} {
+        # since we show the active focus, disable the highlight outline
+        .font.buttonframe.ok config -highlightthickness 0
+    }
+
+    position_over_window .font $::focused_window
+
+    # wait a little for creation, then raise so it's on top
+    after 100 raise .font
 }

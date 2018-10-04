@@ -79,6 +79,7 @@ static void clip_setup(void)
 #define DUMTAB1SIZE 256
 #define DUMTAB2SIZE 1024
 
+/* These are only written at setup time when there's a global lock in place. */
 static float rsqrt_exptab[DUMTAB1SIZE], rsqrt_mantissatab[DUMTAB2SIZE];
 
 static void init_rsqrt(void)
@@ -92,12 +93,12 @@ static void init_rsqrt(void)
         } u;
         int32_t l = (i ? (i == DUMTAB1SIZE-1 ? DUMTAB1SIZE-2 : i) : 1)<< 23;
         u.l = l;
-        rsqrt_exptab[i] = 1./sqrt(u.f);   
+        rsqrt_exptab[i] = 1./sqrt(u.f);
     }
     for (i = 0; i < DUMTAB2SIZE; i++)
     {
         float f = 1 + (1./DUMTAB2SIZE) * i;
-        rsqrt_mantissatab[i] = 1./sqrt(f);      
+        rsqrt_mantissatab[i] = 1./sqrt(f);
     }
 }
 
@@ -148,17 +149,21 @@ static void *sigrsqrt_new(void)
 
 static t_int *sigrsqrt_perform(t_int *w)
 {
-    t_sample *in = *(t_sample **)(w+1), *out = *(t_sample **)(w+2);
+    t_sample *in = (t_sample *)w[1], *out = (t_sample *)w[2];
     t_int n = *(t_int *)(w+3);
     while (n--)
-    {   
-        t_sample f = *in;
-        long l = *(long *)(in++);
+    {
+        t_sample f = *in++;
+        union {
+          float f;
+          long l;
+        } u;
+        u.f = f;
         if (f < 0) *out++ = 0;
         else
         {
-            t_sample g = rsqrt_exptab[(l >> 23) & 0xff] *
-                rsqrt_mantissatab[(l >> 13) & 0x3ff];
+            t_sample g = rsqrt_exptab[(u.l >> 23) & 0xff] *
+                rsqrt_mantissatab[(u.l >> 13) & 0x3ff];
             *out++ = 1.5 * g - 0.5 * g * g * g * f;
         }
     }
@@ -203,17 +208,21 @@ static void *sigsqrt_new(void)
 
 t_int *sigsqrt_perform(t_int *w)    /* not static; also used in d_fft.c */
 {
-    t_sample *in = *(t_sample **)(w+1), *out = *(t_sample **)(w+2);
+    t_sample *in = (t_sample *)w[1], *out = (t_sample *)w[2];
     t_int n = *(t_int *)(w+3);
     while (n--)
-    {   
-        t_sample f = *in;
-        long l = *(long *)(in++);
+    {
+        t_sample f = *in++;
+        union {
+          float f;
+          long l;
+        } u;
+        u.f = f;
         if (f < 0) *out++ = 0;
         else
         {
-            t_sample g = rsqrt_exptab[(l >> 23) & 0xff] *
-                rsqrt_mantissatab[(l >> 13) & 0x3ff];
+            t_sample g = rsqrt_exptab[(u.l >> 23) & 0xff] *
+                rsqrt_mantissatab[(u.l >> 13) & 0x3ff];
             *out++ = f * (1.5 * g - 0.5 * g * g * g * f);
         }
     }
@@ -255,10 +264,25 @@ static void *sigwrap_new(void)
 
 static t_int *sigwrap_perform(t_int *w)
 {
-    t_sample *in = *(t_sample **)(w+1), *out = *(t_sample **)(w+2);
-    t_int n = *(t_int *)(w+3);
+    t_sample *in = (t_sample *)w[1], *out = (t_sample *)w[2];
+    t_int n = (t_int)w[3];
     while (n--)
-    {   
+    {
+        t_sample f = *in++;
+        int k = f;
+        if (k <= f) *out++ = f-k;
+        else *out++ = f - (k-1);
+    }
+    return (w + 4);
+}
+
+     /* old buggy version that sometimes output 1 instead of 0 */
+static t_int *sigwrap_old_perform(t_int *w)
+{
+    t_sample *in = (t_sample *)w[1], *out = (t_sample *)w[2];
+    t_int n = (t_int)w[3];
+    while (n--)
+    {
         t_sample f = *in++;
         int k = f;
         if (f > 0) *out++ = f-k;
@@ -269,7 +293,9 @@ static t_int *sigwrap_perform(t_int *w)
 
 static void sigwrap_dsp(t_sigwrap *x, t_signal **sp)
 {
-    dsp_add(sigwrap_perform, 3, sp[0]->s_vec, sp[1]->s_vec, sp[0]->s_n);
+    dsp_add((pd_compatibilitylevel < 48 ?
+        sigwrap_old_perform : sigwrap_perform),
+            3, sp[0]->s_vec, sp[1]->s_vec, sp[0]->s_n);
 }
 
 void sigwrap_setup(void)
@@ -301,8 +327,8 @@ static void *mtof_tilde_new(void)
 
 static t_int *mtof_tilde_perform(t_int *w)
 {
-    t_sample *in = *(t_sample **)(w+1), *out = *(t_sample **)(w+2);
-    t_int n = *(t_int *)(w+3);
+    t_sample *in = (t_sample *)w[1], *out = (t_sample *)w[2];
+    t_int n = (t_int)w[3];
     for (; n--; in++, out++)
     {
         t_sample f = *in;
@@ -350,8 +376,8 @@ static void *ftom_tilde_new(void)
 
 static t_int *ftom_tilde_perform(t_int *w)
 {
-    t_sample *in = *(t_sample **)(w+1), *out = *(t_sample **)(w+2);
-    t_int n = *(t_int *)(w+3);
+    t_sample *in = (t_sample *)w[1], *out = (t_sample *)w[2];
+    t_int n = (t_int)w[3];
     for (; n--; in++, out++)
     {
         t_sample f = *in;
@@ -394,8 +420,8 @@ static void *dbtorms_tilde_new(void)
 
 static t_int *dbtorms_tilde_perform(t_int *w)
 {
-    t_sample *in = *(t_sample **)(w+1), *out = *(t_sample **)(w+2);
-    t_int n = *(t_int *)(w+3);
+    t_sample *in = (t_sample *)w[1], *out = (t_sample *)w[2];
+    t_int n = (t_int)w[3];
     for (; n--; in++, out++)
     {
         t_sample f = *in;
@@ -444,8 +470,8 @@ static void *rmstodb_tilde_new(void)
 
 static t_int *rmstodb_tilde_perform(t_int *w)
 {
-    t_sample *in = *(t_sample **)(w+1), *out = *(t_sample **)(w+2);
-    t_int n = *(t_int *)(w+3);
+    t_sample *in = (t_sample *)w[1], *out = (t_sample *)w[2];
+    t_int n = (t_int)w[3];
     for (; n--; in++, out++)
     {
         t_sample f = *in;
@@ -466,7 +492,7 @@ static void rmstodb_tilde_dsp(t_rmstodb_tilde *x, t_signal **sp)
 
 void rmstodb_tilde_setup(void)
 {
-    rmstodb_tilde_class = class_new(gensym("rmstodb~"), 
+    rmstodb_tilde_class = class_new(gensym("rmstodb~"),
         (t_newmethod)rmstodb_tilde_new, 0, sizeof(t_rmstodb_tilde), 0, 0);
     CLASS_MAINSIGNALIN(rmstodb_tilde_class, t_rmstodb_tilde, x_f);
     class_addmethod(rmstodb_tilde_class, (t_method)rmstodb_tilde_dsp,
@@ -493,8 +519,8 @@ static void *dbtopow_tilde_new(void)
 
 static t_int *dbtopow_tilde_perform(t_int *w)
 {
-    t_sample *in = *(t_sample **)(w+1), *out = *(t_sample **)(w+2);
-    t_int n = *(t_int *)(w+3);
+    t_sample *in = (t_sample *)w[1], *out = (t_sample *)w[2];
+    t_int n = (t_int)w[3];
     for (; n--; in++, out++)
     {
         t_sample f = *in;
@@ -543,8 +569,8 @@ static void *powtodb_tilde_new(void)
 
 static t_int *powtodb_tilde_perform(t_int *w)
 {
-    t_sample *in = *(t_sample **)(w+1), *out = *(t_sample **)(w+2);
-    t_int n = *(t_int *)(w+3);
+    t_sample *in = (t_sample *)w[1], *out = (t_sample *)w[2];
+    t_int n = (t_int)w[3];
     for (; n--; in++, out++)
     {
         t_sample f = *in;
@@ -599,12 +625,10 @@ t_int *pow_tilde_perform(t_int *w)
     int n = (int)(w[4]);
     while (n--)
     {
-        float f = *in1++;
-        if (f > 0)
-            *out = powf(f, *in2);
-        else *out = 0;
-        out++;
-        in2++;
+        float f1 = *in1++, f2 = *in2++;
+        *out++ = (f1 == 0 && f2 < 0) ||
+            (f1 < 0 && (f2 - (int)f2) != 0) ?
+                0 : pow(f1, f2);
     }
     return (w+5);
 }
@@ -674,10 +698,11 @@ typedef struct _log_tilde
     t_float x_f;
 } t_log_tilde;
 
-static void *log_tilde_new( void)
+static void *log_tilde_new(t_floatarg f)
 {
     t_log_tilde *x = (t_log_tilde *)pd_new(log_tilde_class);
-    inlet_new(&x->x_obj, &x->x_obj.ob_pd, &s_signal, &s_signal);
+    pd_float(
+        (t_pd *)inlet_new(&x->x_obj, &x->x_obj.ob_pd, &s_signal, &s_signal), f);
     outlet_new(&x->x_obj, &s_signal);
     x->x_f = 0;
     return (x);

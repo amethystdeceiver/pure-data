@@ -12,17 +12,17 @@
     a form usable by clock_setunit)( and clock_gettimesincewithunits().
     This brute-force search through symbols really ought not to be done on
     the fly for incoming 'tempo' messages, hmm...  This isn't public because
-    its interface migth want to change - but it's used in x_text.c as well
+    its interface might want to change - but it's used in x_text.c as well
     as here. */
 void parsetimeunits(void *x, t_float amount, t_symbol *unitname,
     t_float *unit, int *samps)
 {
-    char *s = unitname->s_name;
+    const char *s = unitname->s_name;
     if (amount <= 0)
         amount = 1;
     if (s[0] == 'p' && s[1] == 'e' && s[2] == 'r')  /* starts with 'per' */
     {
-        char *s2 = s+3;
+        const char *s2 = s+3;
         if (!strcmp(s2, "millisecond") || !strcmp(s2, "msec"))  /* msec */
             *samps = 0, *unit = 1./amount;
         else if (!strncmp(s2, "sec", 3))        /* seconds */
@@ -277,7 +277,7 @@ static void line_float(t_line *x, t_float f)
             x->x_grain = DEFAULTLINEGRAIN;
         clock_delay(x->x_clock,
             (x->x_grain > x->x_in1val ? x->x_in1val : x->x_grain));
-    
+
     }
     else
     {
@@ -296,6 +296,14 @@ static void line_ft1(t_line *x, t_floatarg g)
 
 static void line_stop(t_line *x)
 {
+    if (pd_compatibilitylevel >= 48)
+    {
+        if (clock_getsystime() >= x->x_targettime)
+            x->x_setval = x->x_targetval;
+        else x->x_setval += x->x_1overtimediff *
+            (clock_getsystime() - x->x_prevtime) *
+                (x->x_targetval - x->x_setval);
+    }
     x->x_targetval = x->x_setval;
     clock_unset(x->x_clock);
 }
@@ -526,7 +534,7 @@ static void hang_tick(t_hang *h)
     int i;
     union word *w;
     if (x->x_hang == h) x->x_hang = h->h_next;
-    else for (h2 = x->x_hang; h3 = h2->h_next; h2 = h3)
+    else for (h2 = x->x_hang; (h3 = h2->h_next); h2 = h3)
     {
         if (h3 == h)
         {
@@ -546,6 +554,7 @@ static void hang_tick(t_hang *h)
                 outlet_pointer(p->p_outlet, w->w_gpointer);
             else pd_error(x, "pipe: stale pointer");
             break;
+        default: break;
         }
     }
     hang_free(h);
@@ -585,6 +594,7 @@ static void pipe_list(t_pipe *x, t_symbol *s, int ac, t_atom *av)
                 if (gp->gp_stub) gp->gp_stub->gs_refcount++;
             }
             gp++;
+        default: break;
         }
     }
     for (i = 0, gp = x->x_gp, gp2 = h->h_gp, p = x->x_vec, w = h->h_vec;
@@ -613,7 +623,7 @@ static void pipe_flush(t_pipe *x)
 static void pipe_clear(t_pipe *x)
 {
     t_hang *hang;
-    while (hang = x->x_hang)
+    while ((hang = x->x_hang))
     {
         x->x_hang = hang->h_next;
         hang_free(hang);
@@ -624,11 +634,13 @@ static void pipe_free(t_pipe *x)
 {
     pipe_clear(x);
     freebytes(x->x_vec, x->x_n * sizeof(*x->x_vec));
+    freebytes(x->x_gp, x->x_nptr * sizeof(*x->x_gp));
+
 }
 
 static void pipe_setup(void)
 {
-    pipe_class = class_new(gensym("pipe"), 
+    pipe_class = class_new(gensym("pipe"),
         (t_newmethod)pipe_new, (t_method)pipe_free,
         sizeof(t_pipe), 0, A_GIMME, 0);
     class_addlist(pipe_class, pipe_list);

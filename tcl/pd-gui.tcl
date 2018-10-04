@@ -10,11 +10,20 @@
 # second while pd loads.
 if { [catch {wm withdraw .} fid] } { exit 2 }
 
-package require Tcl 8.3
-package require Tk
-#package require tile
-## replace Tk widgets with Ttk widgets on 8.5
-#namespace import -force ttk::*
+# This is mainly for OSX as older versions only
+# have 8.4 while newer versions have 8.5.
+if { [catch {package provide Tcl 8.5}] } {
+    # Tcl 8.5 not available
+    package require Tcl 8.4
+    package require Tk
+} else {
+    # Tcl 8.5 is available
+    package require Tcl 8.5
+    package require Tk
+
+    # replace Tk widgets with Ttk widgets on 8.5
+    namespace import -force ttk::*
+}
 
 package require msgcat
 # TODO create a constructor in each package to create things at startup, that
@@ -44,9 +53,9 @@ package require opt_parser
 package require pdtk_canvas
 package require pdtk_text
 package require pdtk_textwindow
+package require pd_guiprefs
 # TODO eliminate this kludge:
 package require wheredoesthisgo
-package require pd_guiprefs
 
 #------------------------------------------------------------------------------#
 # import functions into the global namespace
@@ -55,8 +64,9 @@ package require pd_guiprefs
 namespace import ::pd_guiprefs::init
 namespace import ::pd_guiprefs::update_recentfiles
 namespace import ::pd_guiprefs::write_recentfiles
-# make global since they are used throughout    
-namespace import ::pd_menucommands::* 
+
+# make global since they are used throughout
+namespace import ::pd_menucommands::*
 
 # import into the global namespace for backwards compatibility
 namespace import ::pd_connect::pdsend
@@ -75,7 +85,7 @@ namespace import ::dialog_array::pdtk_array_dialog
 namespace import ::dialog_audio::pdtk_audio_dialog
 namespace import ::dialog_canvas::pdtk_canvas_dialog
 namespace import ::dialog_data::pdtk_data_dialog
-namespace import ::dialog_find::pdtk_couldnotfind
+namespace import ::dialog_find::pdtk_showfindresult
 namespace import ::dialog_font::pdtk_canvas_dofont
 namespace import ::dialog_gatom::pdtk_gatom_dialog
 namespace import ::dialog_iemgui::pdtk_iemgui_dialog
@@ -104,10 +114,6 @@ set PD_BUGFIX_VERSION 0
 set PD_TEST_VERSION ""
 set done_init 0
 
-set TCL_MAJOR_VERSION 0
-set TCL_MINOR_VERSION 0
-set TCL_BUGFIX_VERSION 0
-
 # for testing which platform we are running on ("aqua", "win32", or "x11")
 set windowingsystem ""
 
@@ -123,28 +129,37 @@ set port 0
 set font_family "courier"
 set font_weight "normal"
 # sizes of chars for each of the Pd fixed font sizes:
-#  fontsize  width(pixels)  height(pixels)
-set font_fixed_metrics {
-    8 6 11
-    9 6 12
-    10 7 13
-    12 9 16
-    14 8 17
-    16 10 20
-    18 11 22
-    24 15 25
-    30 18 37
-    36 25 45
+# width(pixels)  height(pixels)
+set font_metrics {
+    5 11
+    6 13
+    7 16
+    10 19
+    14 29
+    22 44
 }
-set font_measured_metrics {}
+
+# sizes as above for zoomed-in view
+set font_zoom2_metrics {
+    10 22
+    12 26
+    14 32
+    20 38
+    28 58
+    44 88
+}
+set font_measured {}
+set font_zoom2_measured {}
 
 # root path to lib of Pd's files, see s_main.c for more info
 set sys_libdir {}
 # root path where the pd-gui.tcl GUI script is located
 set sys_guidir {}
-# user-specified search path for objects, help, fonts, etc.
+# user-specified search paths for objects, help, fonts, etc.
 set sys_searchpath {}
-# hard-coded search patch for objects, help, plugins, etc.
+# user-specified search paths from the commandline -path option
+set sys_temppath {}
+# hard-coded search patchs for objects, help, plugins, etc.
 set sys_staticpath {}
 # the path to the folder where the current plugin is being loaded from
 set current_plugin_loadpath {}
@@ -157,7 +172,6 @@ set startup_libraries {}
 # start dirs for new files and open panels
 set filenewdir [pwd]
 set fileopendir [pwd]
-
 
 # lists of audio/midi devices and APIs for prefs dialogs
 set audio_apilist {}
@@ -198,7 +212,7 @@ array set editingtext {};# if an obj, msg, or comment is being edited, per patch
 array set loaded {}     ;# store whether a patch has completed loading
 array set xscrollable {};# keep track of whether the scrollbars are present
 array set yscrollable {}
-# patch window tree, these might contain patch IDs without a mapped toplevel 
+# patch window tree, these might contain patch IDs without a mapped toplevel
 array set windowname {}    ;# window names based on mytoplevel IDs
 array set childwindows {}  ;# all child windows based on mytoplevel IDs
 array set parentwindows {} ;# topmost parent window ID based on mytoplevel IDs
@@ -213,23 +227,23 @@ set canvas_minwidth 50
 set canvas_minheight 20
 
 # undo states
-set ::undo_action "no"
-set ::redo_action "no"
-set ::undo_toplevel "."
-
+array set undo_actions {}
+array set redo_actions {}
+# unused legacy undo states
+set undo_action no
+set redo_action no
 
 namespace eval ::pdgui:: {
     variable scriptname [ file normalize [ info script ] ]
 }
-
 
 #------------------------------------------------------------------------------#
 # coding style
 #
 # these are preliminary ideas, we'll change them as we work things out:
 # - when possible use "" doublequotes to delimit messages
-# - use '$::myvar' instead of 'global myvar' 
-# - for the sake of clarity, there should not be any inline code, everything 
+# - use '$::myvar' instead of 'global myvar'
+# - for the sake of clarity, there should not be any inline code, everything
 #   should be in a proc that is ultimately triggered from main()
 # - if a menu_* proc opens a dialog panel, that proc is called menu_*_dialog
 # - use "eq/ne" for string comparison, NOT "==/!=" (http://wiki.tcl.tk/15323)
@@ -280,7 +294,7 @@ proc init_for_platform {} {
             option add *PatchWindow*Canvas.background "white" startupFile
             # add control to show/hide hidden files in the open panel (load
             # the tk_getOpenFile dialog once, otherwise it will not work)
-            catch {tk_getOpenFile -with-invalid-argument} 
+            catch {tk_getOpenFile -with-invalid-argument}
             set ::tk::dialog::file::showHiddenBtn 1
             set ::tk::dialog::file::showHiddenVar 0
             # set file types that open/save recognize
@@ -298,7 +312,15 @@ proc init_for_platform {} {
             # frame's upper left corner. http://wiki.tcl.tk/11502
             set ::windowframex 3
             set ::windowframey 53
-			# TODO add wm iconphoto/iconbitmap here if it makes sense
+            # trying loading icon in the GUI directory
+            if {$::tcl_version >= 8.5} {
+                set icon [file join $::sys_guidir pd.gif]
+                if {[file readable $icon]} { 
+                    catch {
+                        wm iconphoto . -default [image create photo -file "$icon"]
+                    }
+                }
+            }
             # mouse cursors for all the different modes
             set ::cursor_runmode_nothing "left_ptr"
             set ::cursor_runmode_clickme "arrow"
@@ -310,11 +332,20 @@ proc init_for_platform {} {
             set ::cursor_editmode_resize "sb_h_double_arrow"
         }
         "aqua" {
+            # load tk::mac event callbacks here, this way launching pd
+            # from the commandline incorporates the special mac event handling
+            package require apple_events
             set ::modifier "Mod1"
+            if {$::tcl_version < 8.5} {
+                # old default font for Tk 8.4 on macOS
+                # since font detection requires 8.5+
+                set ::font_family "Monaco"
+            }
             option add *DialogWindow*background "#E8E8E8" startupFile
             option add *DialogWindow*Entry.highlightBackground "#E8E8E8" startupFile
             option add *DialogWindow*Button.highlightBackground "#E8E8E8" startupFile
             option add *DialogWindow*Entry.background "white" startupFile
+            option add *DialogWindow*Menu.foreground "black" startupFile
             # Mac OS X needs a menubar all the time
             set ::dialog_menubar ".menubar"
             # set file types that open/save recognize
@@ -364,12 +395,24 @@ proc init_for_platform {} {
             set ::menubarsize 0
             # Tk handles the window placement differently on each platform, on
             # Mac OS X, the x,y placement refers to the content window's upper
-            # left corner. http://wiki.tcl.tk/11502 
+            # left corner. http://wiki.tcl.tk/11502
             # TODO this probably needs a script layer: http://wiki.tcl.tk/11291
             set ::windowframex 0
             set ::windowframey 0
             # TODO use 'winico' package for full, hicolor icon support
             wm iconbitmap . -default [file join $::sys_guidir pd.ico]
+            # add local fonts to Tk's font list using pdfontloader
+            if {[file exists [file join "$::sys_libdir" "font"]]} {
+                catch {
+                    load [file join "$::sys_libdir" "bin/pdfontloader.dll"]
+                    set localfonts {"DejaVuSansMono.ttf" "DejaVuSansMono-Bold.ttf"}
+                    foreach font $localfonts {
+                        set path [file join "$::sys_libdir" "font/$font"]
+                        pdfontloader::load $path
+                        ::pdwindow::verbose 0 "pdfontloader loaded [file tail $path]\n"
+                    }
+                }
+            }
             # mouse cursors for all the different modes
             set ::cursor_runmode_nothing "right_ptr"
             set ::cursor_runmode_clickme "arrow"
@@ -404,7 +447,7 @@ proc load_locale {} {
         }
     } elseif {$::tcl_platform(platform) eq "windows"} {
         # using LANG on Windows is useful for easy debugging
-        if {[info exists ::env(LANG)] && $::env(LANG) ne "C" && $::env(LANG) ne ""} {  
+        if {[info exists ::env(LANG)] && $::env(LANG) ne "C" && $::env(LANG) ne ""} {
             ::msgcat::mclocale $::env(LANG)
         } elseif {![catch {package require registry}]} {
             ::msgcat::mclocale [string tolower \
@@ -425,8 +468,8 @@ proc load_locale {} {
 # font handling
 
 # this proc gets the internal font name associated with each size
-proc get_font_for_size {size} {
-    return "::pd_font_${size}"
+proc get_font_for_size {fsize} {
+    return [list $::font_family -$fsize $::font_weight]
 }
 
 # searches for a font to use as the default.  Tk automatically assigns a
@@ -434,7 +477,7 @@ proc get_font_for_size {size} {
 # always do a good job of choosing in respect to Pd's needs.  So this chooses
 # from a list of fonts that are known to work well with Pd.
 proc find_default_font {} {
-    set testfonts {"DejaVu Sans Mono" "Bitstream Vera Sans Mono" \
+    set testfonts {"DejaVu Sans Mono" "Bitstream Vera Sans Mono" "Monaco" \
         "Inconsolata" "Courier 10 Pitch" "Andale Mono" "Droid Sans Mono"}
     foreach family $testfonts {
         if {[lsearch -exact -nocase [font families] $family] > -1} {
@@ -442,7 +485,7 @@ proc find_default_font {} {
             break
         }
     }
-    ::pdwindow::verbose 0 "Default font: $::font_family\n"
+    ::pdwindow::verbose 0 "Detected font: $::font_family\n"
 }
 
 proc set_base_font {family weight} {
@@ -461,40 +504,48 @@ proc set_base_font {family weight} {
             [_ "WARNING: Font weight '%s' not found, using default (%s)\n"] \
                 $weight $::font_weight]
     }
+    ::pdwindow::verbose 0 "Using font: $::font_family $::font_weight\n"
 }
 
-# creates all the base fonts (i.e. pd_font_8 thru pd_font_36) so that they fit
+# create all the base fonts (i.e. pd_font_8 thru pd_font_36) so that they fit
 # into the metrics given by $::font_fixed_metrics for any given font/weight
 proc fit_font_into_metrics {} {
-# TODO the fonts picked seem too small, probably on fixed width
-    foreach {size width height} $::font_fixed_metrics {
-        set myfont [get_font_for_size $size]
-        font create $myfont -family $::font_family -weight $::font_weight \
-            -size [expr {-$height}]
-        set height2 $height
-        set giveup 0
-        while {[font measure $myfont M] > $width || \
-            [font metrics $myfont -linespace] > $height} {
-            incr height2 -1
-            font configure $myfont -size [expr {-$height2}]
-            if {$height2 * 2 <= $height} {
-                set giveup 1
-                set ::font_measured_metrics $::font_fixed_metrics
-                break
-            }
-        }
-        set ::font_measured_metrics \
-            "$::font_measured_metrics  $size\
-                [font measure $myfont M] [font metrics $myfont -linespace]"
-        if {$giveup} {
-            ::pdwindow::post [format \
-    [_ "WARNING: %s failed to find font size (%s) that fits into %sx%s!\n"]\
-               [lindex [info level 0] 0] $size $width $height]
-            continue
-        }
-    }
-}
+    set lastsize 0
+    set lastwidth 0
+    set lastheight 0
 
+    for {set fsize 6} {$fsize < 120 && [llength $::font_zoom2_metrics] > 1} \
+            {incr fsize} {
+        set foo [list $::font_family -$fsize $::font_weight]
+        set height [font metrics $foo -linespace]
+        set width [font measure $foo M]
+        # puts stderr [concat $fsize $width $height]
+        if {[llength $::font_metrics] > 1 && \
+            ( $width > [lindex $::font_metrics 0] || \
+            $height > [lindex $::font_metrics 1] )} {
+                # puts [concat SINGLE $fsize]
+                lappend ::font_measured $lastsize $lastwidth $lastheight
+                set ::font_metrics [lrange $::font_metrics 2 end]
+        }
+        if {$width > [lindex $::font_zoom2_metrics 0] || \
+            $height > [lindex $::font_zoom2_metrics 1]} {
+                # puts [concat DOUBLE $fsize]
+                lappend ::font_zoom2_measured $lastsize $lastwidth $lastheight
+                set ::font_zoom2_metrics [lrange $::font_zoom2_metrics 2 end]
+        }
+        set lastsize $fsize
+        set lastwidth $width
+        set lastheight $height
+    }
+    # ::pdwindow::verbose 0 "Measured font metrics:\n"
+    # foreach {size width height} $::font_measured {
+    #     ::pdwindow::verbose 0 "$size $width $height\n"
+    # }
+    # ::pdwindow::verbose 0 "Measured zoom2 font metrics:\n"
+    # foreach {size width height} $::font_zoom2_measured {
+    #     ::pdwindow::verbose 0 "$size $width $height\n"
+    # }
+}
 
 # ------------------------------------------------------------------------------
 # procs called directly by pd
@@ -508,17 +559,21 @@ proc pdtk_pd_startup {major minor bugfix test
     set oldtclversion 0
     set ::audio_apilist $audio_apis
     set ::midi_apilist $midi_apis
+    ::pdwindow::verbose 0 "Tk [info patchlevel]\n"
     if {$::tcl_version >= 8.5} {find_default_font}
     set_base_font $sys_font $sys_fontweight
     fit_font_into_metrics
     ::pd_guiprefs::init
-    pdsend "pd init [enquote_path [pwd]] $oldtclversion $::font_measured_metrics"
+    pdsend "pd init [enquote_path [pwd]] $oldtclversion \
+        $::font_measured $::font_zoom2_measured"
     ::pd_bindings::class_bindings
     ::pd_bindings::global_bindings
     ::pd_menus::create_menubar
-    ::pdtk_canvas::create_popup
     ::pdwindow::create_window
+    ::pdwindow::configure_menubar
     ::pd_menus::configure_for_pdwindow
+    ::pdwindow::create_window_finalize
+    ::pdtk_canvas::create_popup
     load_startup_plugins
     open_filestoopen
     set ::done_init 1
@@ -540,20 +595,19 @@ proc pdtk_check {mytoplevel message reply_to_pd default} {
     }
 }
 
-# store plugin callbacks for dispatched messages from running Pd patches
-global plugin_dispatch_receivers
-
 # dispatch a message from running Pd patches to the intended plugin receiver
 proc pdtk_plugin_dispatch { args } {
     set receiver [ lindex $args 0 ]
-    foreach callback $::pd_connect::plugin_dispatch_receivers($receiver) {
-        $callback [ lrange $args 1 end ]
+    if [ info exists ::pd_connect::plugin_dispatch_receivers($receiver) ] {
+       foreach callback $::pd_connect::plugin_dispatch_receivers($receiver) {
+               $callback [ lrange $args 1 end ]
+       }
     }
 }
 
 # ------------------------------------------------------------------------------
 # parse command line args when Wish/pd-gui.tcl is started first
- 
+
 proc parse_args {argc argv} {
     opt_parser::init {
         {-stderr    set {::stderr}}
@@ -561,13 +615,14 @@ proc parse_args {argc argv} {
     }
     set unflagged_files [opt_parser::get_options $argv]
     # if we have a single arg that is not a file, its a port or host:port combo
-    if {$argc == 1 && ! [file exists $argv]} {
-        if { [string is int $argv] && $argv > 0} {
+    if {$argc == 1 && ! [file exists [ lindex $argv 0 ]]} {
+           set arg1 [ lindex $argv 0 ]
+        if { [string is int $arg1] && $arg1 > 0} {
             # 'pd-gui' got the port number from 'pd'
             set ::host "localhost"
-            set ::port $argv 
+            set ::port $arg1
         } else {
-            set hostport [split $argv ":"]
+            set hostport [split $arg1 ":"]
             set ::port [lindex $hostport 1]
             if { [string is int $::port] && $::port > 0} {
                 set ::host [lindex $hostport 0]
@@ -644,6 +699,11 @@ proc dde_open_handler {cmd} {
 }
 
 proc check_for_running_instances { } {
+    # if pd-gui gets called from pd ('pd-gui 5400') or is told otherwise
+    # to connect to a running instance of Pd (by providing [<host>:]<port>)
+    # then we don't want to connect to a running instance
+    if { $::port > 0 && $::host ne "" } { return }
+
     switch -- $::windowingsystem {
         "aqua" {
             # handled by ::tk::mac::OpenDocument in apple_events.tcl
@@ -652,10 +712,6 @@ proc check_for_running_instances { } {
             # TODO replace PUREDATA name with path so this code is a singleton
             # based on install location rather than this hard-coded name
             if {![singleton ${::pdgui::scriptname}_MANAGER ]} {
-                # if pd-gui gets called from pd ('pd-gui 5400') or is told otherwise
-                # to connect to a running instance of Pd (by providing [<host>:]<port>)
-                # then we don't want to connect to a running instance
-                if { $::port > 0 && $::host ne "" } { return }
                 selection handle -selection ${::pdgui::scriptname} . "send_args"
                 selection own -command others_lost -selection ${::pdgui::scriptname} .
                 after 5000 set ::singleton_state "timeout"
@@ -668,10 +724,17 @@ proc check_for_running_instances { } {
         } "win32" {
             ## http://wiki.tcl.tk/8940
             package require dde ;# 1.4 or later needed for full unicode support
-            set topic "Pure_Data_DDE_Open"
+            set topic "Pure_Data_DDE_Open ${::pdgui::scriptname}"
             # if no DDE service is running, start one and claim the name
             if { [dde services TclEval $topic] == {} } {
+                # registers the interpreter as a DDE server with the service name 'TclEval' and the topic name specified by 'topic'
                 dde servername -handler dde_open_handler $topic
+            } else {
+                # DDE is already running: use it to open the file with the running instance
+                # we only open a single file (assuming that this is called by double-clicking)
+                set filename [lindex ${::argv} 0]
+                dde eval $topic $filename
+                exit 0
             }
         }
     }
@@ -705,7 +768,12 @@ proc load_plugin_script {filename} {
 }
 
 proc load_startup_plugins {} {
-    foreach pathdir [concat $::sys_searchpath $::sys_staticpath] {
+    # load built-in plugins
+    load_plugin_script [file join $::sys_guidir pd_deken.tcl]
+    load_plugin_script [file join $::sys_guidir pd_docsdir.tcl]
+
+    # load other installed plugins
+    foreach pathdir [concat $::sys_searchpath $::sys_temppath $::sys_staticpath] {
         set dir [file normalize $pathdir]
         if { ! [file isdirectory $dir]} {continue}
         foreach filename [glob -directory $dir -nocomplain -types {f} -- \
@@ -719,8 +787,12 @@ proc load_startup_plugins {} {
 # ------------------------------------------------------------------------------
 # main
 proc main {argc argv} {
-    # TODO Tcl/Tk 8.3 doesn't have [tk windowingsystem]
     set ::windowingsystem [tk windowingsystem]
+    set ::platform $::tcl_platform(os)
+    if { $::tcl_platform(platform) eq "windows"} {
+       set ::platform W32
+    }
+
     tk appname pd-gui
     load_locale
     parse_args $argc $argv
@@ -737,11 +809,9 @@ proc main {argc argv} {
         set ::port [::pd_connect::create_socket]
         set pd_exec [file join [file dirname [info script]] ../bin/pd]
         exec -- $pd_exec -guiport $::port &
-        if {$::windowingsystem eq "aqua"} {
-            # on Aqua, if 'pd-gui' first, then initial dir is home
-            set ::filenewdir $::env(HOME)
-            set ::fileopendir $::env(HOME)
-        }
+        # if 'pd-gui' first, then initial dir is home
+        set ::filenewdir $::env(HOME)
+        set ::fileopendir $::env(HOME)
     }
     ::pdwindow::verbose 0 "------------------ done with main ----------------------\n"
 }

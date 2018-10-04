@@ -9,8 +9,9 @@
 #include <string.h>
 #include <errno.h>
 #include "s_stuff.h"
-#ifdef _MSC_VER  /* This is only for Microsoft's compiler, not cygwin, e.g. */
-#define snprintf sprintf_s
+
+#ifdef _MSC_VER
+#define snprintf _snprintf
 #endif
 
 t_printhook sys_printhook;
@@ -30,9 +31,9 @@ static char* strnescape(char *dest, const char *src, size_t len)
         if (c==0) break;
     }
 
-    if(ptout < len) 
+    if(ptout < len)
         dest[ptout]=0;
-    else 
+    else
         dest[len-1]=0;
 
     return dest;
@@ -41,7 +42,7 @@ static char* strnescape(char *dest, const char *src, size_t len)
 static char* strnpointerid(char *dest, const void *pointer, size_t len)
 {
     *dest=0;
-    if (pointer) 
+    if (pointer)
         snprintf(dest, len, ".x%lx", (unsigned long)pointer);
     return dest;
 }
@@ -50,7 +51,7 @@ static void dopost(const char *s)
 {
     if (sys_printhook)
         (*sys_printhook)(s);
-    else if (sys_printtostderr)
+    else if (sys_printtostderr || !sys_havegui())
 #ifdef _WIN32
         fwprintf(stderr, L"%S", s);
 #else
@@ -69,7 +70,7 @@ static void doerror(const void *object, const char *s)
     upbuf[MAXPDSTRING-1]=0;
 
     // what about sys_printhook_error ?
-    if (sys_printhook) 
+    if (sys_printhook)
     {
         snprintf(upbuf, MAXPDSTRING-1, "error: %s", s);
         (*sys_printhook)(upbuf);
@@ -80,7 +81,7 @@ static void doerror(const void *object, const char *s)
     {
         char obuf[MAXPDSTRING];
         sys_vgui("::pdwindow::logpost {%s} 1 {%s}\n",
-                 strnpointerid(obuf, object, MAXPDSTRING), 
+                 strnpointerid(obuf, object, MAXPDSTRING),
                  strnescape(upbuf, s, MAXPDSTRING));
     }
 }
@@ -91,20 +92,20 @@ static void dologpost(const void *object, const int level, const char *s)
     upbuf[MAXPDSTRING-1]=0;
 
     // what about sys_printhook_verbose ?
-    if (sys_printhook) 
+    if (sys_printhook)
     {
         snprintf(upbuf, MAXPDSTRING-1, "verbose(%d): %s", level, s);
         (*sys_printhook)(upbuf);
     }
-    else if (sys_printtostderr) 
+    else if (sys_printtostderr)
     {
         fprintf(stderr, "verbose(%d): %s", level, s);
     }
     else
     {
         char obuf[MAXPDSTRING];
-        sys_vgui("::pdwindow::logpost {%s} %d {%s}\n", 
-                 strnpointerid(obuf, object, MAXPDSTRING), 
+        sys_vgui("::pdwindow::logpost {%s} %d {%s}\n",
+                 strnpointerid(obuf, object, MAXPDSTRING),
                  level, strnescape(upbuf, s, MAXPDSTRING));
     }
 }
@@ -157,7 +158,7 @@ void poststring(const char *s)
     dopost(s);
 }
 
-void postatom(int argc, t_atom *argv)
+void postatom(int argc, const t_atom *argv)
 {
     int i;
     for (i = 0; i < argc; i++)
@@ -223,11 +224,11 @@ void verbose(int level, const char *fmt, ...)
     offending or offended object around so the user can search for it
     later. */
 
-static void *error_object;
+static const void *error_object;
 static char error_string[256];
-void canvas_finderror(void *object);
+void canvas_finderror(const void *object);
 
-void pd_error(void *object, const char *fmt, ...)
+void pd_error(const void *object, const char *fmt, ...)
 {
     char buf[MAXPDSTRING];
     va_list ap;
@@ -257,7 +258,7 @@ void pd_error(void *object, const char *fmt, ...)
 void glob_finderror(t_pd *dummy)
 {
     if (!error_object)
-        post("no findable error yet.");
+        post("no findable error yet");
     else
     {
         post("last trackable error:");
@@ -269,7 +270,7 @@ void glob_finderror(t_pd *dummy)
 void glob_findinstance(t_pd *dummy, t_symbol*s)
 {
     // revert s to (potential) pointer to object
-    long obj = 0;
+    PD_LONGINTTYPE obj = 0;
     if (sscanf(s->s_name, ".x%lx", &obj))
     {
         if (obj)
@@ -312,5 +313,4 @@ void sys_ouch(void)
 {
     if (*errobject) error("%s: %s", errobject, errstring);
     else error("%s", errstring);
-    sys_gui("bell\n");
 }

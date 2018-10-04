@@ -14,15 +14,14 @@
 #ifdef _WIN32
 #include <io.h>
 #endif
-extern t_pd *newest;    /* OK - this should go into a .h file now :) */
 
-#ifdef HAVE_ALLOCA_H        /* ifdef nonsense to find include for alloca() */
-# include <alloca.h>        /* linux, mac, mingw, cygwin */
-#elif defined _MSC_VER
-# include <malloc.h>        /* MSVC */
+#ifdef _WIN32
+# include <malloc.h> /* MSVC or mingw on windows */
+#elif defined(__linux__) || defined(__APPLE__)
+# include <alloca.h> /* linux, mac, mingw, cygwin */
 #else
-# include <stddef.h>        /* BSDs for example */
-#endif                      /* end alloca() ifdef nonsense */
+# include <stdlib.h> /* BSDs for example */
+#endif
 
 #ifndef HAVE_ALLOCA     /* can work without alloca() but we never need it */
 #define HAVE_ALLOCA 1
@@ -51,9 +50,9 @@ static void *table_donew(t_symbol *s, int size, int flags,
     if (s == &s_)
     {
          char  tabname[255];
-         t_symbol *t = gensym("table"); 
+         t_symbol *t = gensym("table");
          sprintf(tabname, "%s%d", t->s_name, tabcount++);
-         s = gensym(tabname); 
+         s = gensym(tabname);
     }
     if (size < 1)
         size = 100;
@@ -73,7 +72,7 @@ static void *table_donew(t_symbol *s, int size, int flags,
 
     graph_array(gl, s, &s_float, size, flags);
 
-    newest = &x->gl_pd;     /* mimic action of canvas_pop() */
+    pd_this->pd_newest = &x->gl_pd;     /* mimic action of canvas_pop() */
     pd_popsym(&x->gl_pd);
     x->gl_loading = 0;
 
@@ -86,7 +85,7 @@ static void *table_new(t_symbol *s, t_floatarg f)
 }
 
     /* return true if the "canvas" object is a "table". */
-int canvas_istable(t_canvas *x)
+int canvas_istable(const t_canvas *x)
 {
     t_atom *argv = (x->gl_obj.te_binbuf? binbuf_getvec(x->gl_obj.te_binbuf):0);
     int argc = (x->gl_obj.te_binbuf? binbuf_getnatom(x->gl_obj.te_binbuf) : 0);
@@ -170,12 +169,13 @@ static void *array_define_new(t_symbol *s, int argc, t_atom *argv)
         postatom(argc, argv); endpost();
     }
     x = (t_glist *)table_donew(arrayname, arraysize, keep, xpix, ypix);
-    
+
         /* bash the class to "array define".  We don't do this earlier in
         part so that canvas_getcurrent() will work while the glist and
         garray are being created.  There may be other, unknown side effects. */
     x->gl_obj.ob_pd = array_define_class;
     array_define_yrange(x, ylo, yhi);
+    outlet_new(&x->gl_obj, &s_pointer);
     return (x);
 }
 
@@ -190,8 +190,13 @@ void array_define_save(t_gobj *z, t_binbuf *bb)
     binbuf_addbinbuf(bb, x->gl_obj.ob_binbuf);
     binbuf_addsemi(bb);
 
-    garray_savecontentsto((t_garray *)gl->gl_list, bb);
-    obj_saveformat(&x->gl_obj, bb);
+    if (gl)
+    {
+        garray_savecontentsto((t_garray *)gl->gl_list, bb);
+        obj_saveformat(&x->gl_obj, bb);
+    }
+    else
+        bug("array_define_save");
 }
 
 t_scalar *garray_getscalar(t_garray *x);
@@ -212,7 +217,22 @@ static void array_define_send(t_glist *x, t_symbol *s)
         pd_pointer(s->s_thing, &gp);
         gpointer_unset(&gp);
     }
-    else bug("array_define_anything");
+    else bug("array_define_send");
+}
+
+static void array_define_bang(t_glist *x)
+{
+    t_glist *gl = (x->gl_list ? pd_checkglist(&x->gl_list->g_pd) : 0);
+    if (gl && gl->gl_list && pd_class(&gl->gl_list->g_pd) == garray_class)
+    {
+        t_gpointer gp;
+        gpointer_init(&gp);
+        gpointer_setglist(&gp, gl,
+            garray_getscalar((t_garray *)gl->gl_list));
+        outlet_pointer(x->gl_obj.ob_outlet, &gp);
+        gpointer_unset(&gp);
+    }
+    else bug("array_define_bang");
 }
 
     /* just forward any messages to the garray */
@@ -272,7 +292,7 @@ static t_array *array_client_getbuf(t_array_client *x, t_glist **glist)
     {
         t_template *template = template_findbyname(x->tc_struct);
         t_gstub *gs = x->tc_gp.gp_stub;
-        t_word *vec; 
+        t_word *vec;
         int onset, type;
         t_symbol *arraytype;
         if (!template)
@@ -319,7 +339,8 @@ static void array_client_senditup(t_array_client *x)
 {
     t_glist *glist = 0;
     t_array *a = array_client_getbuf(x, &glist);
-    array_redraw(a, glist);
+    if (glist)
+       array_redraw(a, glist);
 }
 
 static void array_client_free(t_array_client *x)
@@ -403,6 +424,11 @@ static void array_size_float(t_array_size *x, t_floatarg f)
         {
             t_garray *y = (t_garray *)pd_findbyclass(x->x_tc.tc_sym,
                 garray_class);
+            if (!y)
+            {
+                pd_error(x, "no such array '%s'", x->x_tc.tc_sym->s_name);
+                return;
+            }
             garray_resize(y, f);
         }
         else
@@ -421,8 +447,8 @@ static t_class *array_sum_class;
 typedef struct _array_rangeop   /* any operation meaningful on a subrange */
 {
     t_array_client x_tc;
-    float x_onset;
-    float x_n;
+    t_float x_onset;
+    t_float x_n;
     t_symbol *x_elemfield;
     t_symbol *x_elemtemplate;   /* unused - perhaps should at least check it */
 } t_array_rangeop;
@@ -446,7 +472,7 @@ static void *array_rangeop_new(t_class *class,
     x->x_sym = x->x_struct = x->x_field = 0;
     gpointer_init(&x->x_gp);
     x->x_elemtemplate = &s_;
-    x->x_elemfield = gensym("y"); 
+    x->x_elemfield = gensym("y");
     x->x_onset = 0;
     x->x_n = -1;
     if (onsetin)
@@ -513,19 +539,17 @@ static void *array_rangeop_new(t_class *class,
 }
 
 static int array_rangeop_getrange(t_array_rangeop *x,
-    char **firstitemp, int *nitemp, int *stridep)
+    char **firstitemp, int *nitemp, int *stridep, int *arrayonsetp)
 {
     t_glist *glist;
     t_array *a = array_client_getbuf(&x->x_tc, &glist);
-    char *elemp;
-    int stride, onset, firstitem, nitem, i, type;
+    int stride, fieldonset, arrayonset, nitem, type;
     t_symbol *arraytype;
-    double sum;
     t_template *template;
     if (!a)
         return (0);
     template = template_findbyname(a->a_templatesym);
-    if (!template_find_field(template, x->x_elemfield, &onset,
+    if (!template_find_field(template, x->x_elemfield, &fieldonset,
         &type, &arraytype) || type != DT_FLOAT)
     {
         pd_error(x, "can't find field %s in struct %s",
@@ -533,22 +557,23 @@ static int array_rangeop_getrange(t_array_rangeop *x,
         return (0);
     }
     stride = a->a_elemsize;
-    firstitem = x->x_onset;
-    if (firstitem < 0)
-        firstitem = 0;
-    else if (firstitem > a->a_n)
-        firstitem = a->a_n;
+    arrayonset = x->x_onset;
+    if (arrayonset < 0)
+        arrayonset = 0;
+    else if (arrayonset > a->a_n)
+        arrayonset = a->a_n;
     if (x->x_n < 0)
-        nitem = a->a_n - firstitem;
+        nitem = a->a_n - arrayonset;
     else
     {
         nitem = x->x_n;
-        if (nitem + firstitem > a->a_n)
-            nitem = a->a_n - firstitem;
+        if (nitem + arrayonset > a->a_n)
+            nitem = a->a_n - arrayonset;
     }
-    *firstitemp = a->a_vec+onset+firstitem*stride;
+    *firstitemp = a->a_vec+(fieldonset+arrayonset*stride);
     *nitemp = nitem;
     *stridep = stride;
+    *arrayonsetp = arrayonset;
     return (1);
 }
 
@@ -570,9 +595,9 @@ static void *array_sum_new(t_symbol *s, int argc, t_atom *argv)
 static void array_sum_bang(t_array_rangeop *x)
 {
     char *itemp, *firstitem;
-    int stride, nitem, i;
+    int stride, nitem, arrayonset, i;
     double sum;
-    if (!array_rangeop_getrange(x, &firstitem, &nitem, &stride))
+    if (!array_rangeop_getrange(x, &firstitem, &nitem, &stride, &arrayonset))
         return;
     for (i = 0, sum = 0, itemp = firstitem; i < nitem; i++, itemp += stride)
         sum += *(t_float *)itemp;
@@ -601,14 +626,15 @@ static void *array_get_new(t_symbol *s, int argc, t_atom *argv)
 static void array_get_bang(t_array_rangeop *x)
 {
     char *itemp, *firstitem;
-    int stride, nitem, i;
+    int stride, nitem, arrayonset, i;
     t_atom *outv;
-    if (!array_rangeop_getrange(x, &firstitem, &nitem, &stride))
+    if (!array_rangeop_getrange(x, &firstitem, &nitem, &stride, &arrayonset))
         return;
     ATOMS_ALLOCA(outv, nitem);
     for (i = 0, itemp = firstitem; i < nitem; i++, itemp += stride)
         SETFLOAT(&outv[i],  *(t_float *)itemp);
     outlet_list(x->x_outlet, 0, nitem, outv);
+    ATOMS_FREEA(outv, nitem);
 }
 
 static void array_get_float(t_array_rangeop *x, t_floatarg f)
@@ -633,8 +659,8 @@ static void array_set_list(t_array_rangeop *x, t_symbol *s,
     int argc, t_atom *argv)
 {
     char *itemp, *firstitem;
-    int stride, nitem, i;
-    if (!array_rangeop_getrange(x, &firstitem, &nitem, &stride))
+    int stride, nitem, arrayonset, i;
+    if (!array_rangeop_getrange(x, &firstitem, &nitem, &stride, &arrayonset))
         return;
     if (nitem > argc)
         nitem = argc;
@@ -659,9 +685,9 @@ static void *array_quantile_new(t_symbol *s, int argc, t_atom *argv)
 static void array_quantile_float(t_array_rangeop *x, t_floatarg f)
 {
     char *itemp, *firstitem;
-    int stride, nitem, i;
+    int stride, nitem, arrayonset, i;
     double sum;
-    if (!array_rangeop_getrange(x, &firstitem, &nitem, &stride))
+    if (!array_rangeop_getrange(x, &firstitem, &nitem, &stride, &arrayonset))
         return;
     for (i = 0, sum = 0, itemp = firstitem; i < nitem; i++, itemp += stride)
         sum += (*(t_float *)itemp > 0? *(t_float *)itemp : 0);
@@ -702,11 +728,12 @@ static void array_random_seed(t_array_random *x, t_floatarg f)
 
 static void array_random_bang(t_array_random *x)
 {
-    char *itemp, *firstitem;
-    int stride, nitem, i;
-    
-    if (!array_rangeop_getrange(&x->x_r, &firstitem, &nitem, &stride))
-        return;
+    char *firstitem;
+    int stride, nitem, arrayonset;
+
+    if (!array_rangeop_getrange(&x->x_r, &firstitem, &nitem, &stride,
+        &arrayonset))
+            return;
     x->x_state = x->x_state * 472940017 + 832416023;
     array_quantile_float(&x->x_r, (1./4294967296.0) * (double)(x->x_state));
 }
@@ -739,15 +766,16 @@ static void *array_max_new(t_symbol *s, int argc, t_atom *argv)
 static void array_max_bang(t_array_max *x)
 {
     char *itemp, *firstitem;
-    int stride, nitem, i, besti;
+    int stride, nitem, arrayonset, i, besti;
     t_float bestf;
-    if (!array_rangeop_getrange(&x->x_rangeop, &firstitem, &nitem, &stride))
-        return;
-    for (i = 0, besti = 0, bestf= -1e30, itemp = firstitem;
+    if (!array_rangeop_getrange(&x->x_rangeop, &firstitem, &nitem, &stride,
+        &arrayonset))
+            return;
+    for (i = 0, besti = -1, bestf= -1e30, itemp = firstitem;
         i < nitem; i++, itemp += stride)
             if (*(t_float *)itemp > bestf)
-                bestf = *(t_float *)itemp, besti = i;
-    outlet_float(x->x_out2, besti + x->x_rangeop.x_onset);
+                bestf = *(t_float *)itemp, besti = i+arrayonset;
+    outlet_float(x->x_out2, besti);
     outlet_float(x->x_out1, bestf);
 }
 
@@ -779,15 +807,16 @@ static void *array_min_new(t_symbol *s, int argc, t_atom *argv)
 static void array_min_bang(t_array_min *x)
 {
     char *itemp, *firstitem;
-    int stride, nitem, i, besti;
+    int stride, nitem, i, arrayonset, besti;
     t_float bestf;
-    if (!array_rangeop_getrange(&x->x_rangeop, &firstitem, &nitem, &stride))
-        return;
-    for (i = 0, besti = 0, bestf= 1e30, itemp = firstitem;
+    if (!array_rangeop_getrange(&x->x_rangeop, &firstitem, &nitem, &stride,
+        &arrayonset))
+            return;
+    for (i = 0, besti = -1, bestf= 1e30, itemp = firstitem;
         i < nitem; i++, itemp += stride)
             if (*(t_float *)itemp < bestf)
-                bestf = *(t_float *)itemp, besti = i;
-    outlet_float(x->x_out2, besti + x->x_rangeop.x_onset);
+                bestf = *(t_float *)itemp, besti = i+arrayonset;
+    outlet_float(x->x_out2, besti);
     outlet_float(x->x_out1, bestf);
 }
 
@@ -801,35 +830,35 @@ static void array_min_float(t_array_min *x, t_floatarg f)
 static void *arrayobj_new(t_symbol *s, int argc, t_atom *argv)
 {
     if (!argc || argv[0].a_type != A_SYMBOL)
-        newest = array_define_new(s, argc, argv);
+        pd_this->pd_newest = array_define_new(s, argc, argv);
     else
     {
-        char *str = argv[0].a_w.w_symbol->s_name;
+        const char *str = argv[0].a_w.w_symbol->s_name;
         if (!strcmp(str, "d") || !strcmp(str, "define"))
-            newest = array_define_new(s, argc-1, argv+1);
+            pd_this->pd_newest = array_define_new(s, argc-1, argv+1);
         else if (!strcmp(str, "size"))
-            newest = array_size_new(s, argc-1, argv+1);
+            pd_this->pd_newest = array_size_new(s, argc-1, argv+1);
         else if (!strcmp(str, "sum"))
-            newest = array_sum_new(s, argc-1, argv+1);
+            pd_this->pd_newest = array_sum_new(s, argc-1, argv+1);
         else if (!strcmp(str, "get"))
-            newest = array_get_new(s, argc-1, argv+1);
+            pd_this->pd_newest = array_get_new(s, argc-1, argv+1);
         else if (!strcmp(str, "set"))
-            newest = array_set_new(s, argc-1, argv+1);
+            pd_this->pd_newest = array_set_new(s, argc-1, argv+1);
         else if (!strcmp(str, "quantile"))
-            newest = array_quantile_new(s, argc-1, argv+1);
+            pd_this->pd_newest = array_quantile_new(s, argc-1, argv+1);
         else if (!strcmp(str, "random"))
-            newest = array_random_new(s, argc-1, argv+1);
+            pd_this->pd_newest = array_random_new(s, argc-1, argv+1);
         else if (!strcmp(str, "max"))
-            newest = array_max_new(s, argc-1, argv+1);
+            pd_this->pd_newest = array_max_new(s, argc-1, argv+1);
         else if (!strcmp(str, "min"))
-            newest = array_min_new(s, argc-1, argv+1);
-        else 
+            pd_this->pd_newest = array_min_new(s, argc-1, argv+1);
+        else
         {
             error("array %s: unknown function", str);
-            newest = 0;
+            pd_this->pd_newest = 0;
         }
     }
-    return (newest);
+    return (pd_this->pd_newest);
 }
 
 void canvas_add_for_class(t_class *c);
@@ -843,6 +872,7 @@ void x_array_setup(void )
     canvas_add_for_class(array_define_class);
     class_addmethod(array_define_class, (t_method)array_define_send,
         gensym("send"), A_SYMBOL, 0);
+    class_addbang(array_define_class, array_define_bang);
     class_addanything(array_define_class, array_define_anything);
     class_sethelpsymbol(array_define_class, gensym("array-object"));
     class_setsavefn(array_define_class, array_define_save);

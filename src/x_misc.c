@@ -6,6 +6,7 @@
 
 #include "m_pd.h"
 #include "s_stuff.h"
+#include "g_canvas.h"
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -31,13 +32,13 @@
 #define CLOCKHZ CLOCKS_PER_SEC
 #endif
 
-#ifdef HAVE_ALLOCA_H        /* ifdef nonsense to find include for alloca() */
-# include <alloca.h>        /* linux, mac, mingw, cygwin */
-#elif defined _MSC_VER
-# include <malloc.h>        /* MSVC */
+#ifdef _WIN32
+# include <malloc.h> /* MSVC or mingw on windows */
+#elif defined(__linux__) || defined(__APPLE__)
+# include <alloca.h> /* linux, mac, mingw, cygwin */
 #else
-# include <stddef.h>        /* BSDs for example */
-#endif                      /* end alloca() ifdef nonsense */
+# include <stdlib.h> /* BSDs for example */
+#endif
 
 /* -------------------------- random ------------------------------ */
 /* this is strictly homebrew and untested. */
@@ -111,9 +112,9 @@ static void *loadbang_new(void)
     return (x);
 }
 
-static void loadbang_loadbang(t_loadbang *x)
+static void loadbang_loadbang(t_loadbang *x, t_floatarg action)
 {
-    if (!sys_noloadbang)
+    if (action == LB_LOAD)
         outlet_bang(x->x_obj.ob_outlet);
 }
 
@@ -122,7 +123,7 @@ static void loadbang_setup(void)
     loadbang_class = class_new(gensym("loadbang"), (t_newmethod)loadbang_new, 0,
         sizeof(t_loadbang), CLASS_NOINLET, 0);
     class_addmethod(loadbang_class, (t_method)loadbang_loadbang,
-        gensym("loadbang"), 0);
+        gensym("loadbang"), A_DEFFLOAT, 0);
 }
 
 /* ------------- namecanvas (delete this later) --------------------- */
@@ -154,48 +155,6 @@ static void namecanvas_setup(void)
     namecanvas_class = class_new(gensym("namecanvas"),
         (t_newmethod)namecanvas_new, (t_method)namecanvas_free,
             sizeof(t_namecanvas), CLASS_NOINLET, A_DEFSYM, 0);
-}
-
-/* ---------------serial ports (_WIN32 only -- hack) ------------------------- */
-#define MAXSERIAL 100
-
-static t_class *serial_class;
-
-typedef struct _serial
-{
-    t_object x_obj;
-    int x_portno;
-    int x_open;
-} t_serial;
-
-static void serial_float(t_serial *x, t_float f)
-{
-    int n = f;
-    char message[MAXSERIAL * 4 + 100];
-    if (!x->x_open)
-    {
-        sys_vgui("com%d_open\n", x->x_portno);
-        x->x_open = 1;
-    }
-    sprintf(message, "com%d_send \"\\%3.3o\"\n", x->x_portno, n);
-    sys_gui(message);
-}
-
-static void *serial_new(t_floatarg fportno)
-{
-    int portno = fportno;
-    t_serial *x = (t_serial *)pd_new(serial_class);
-    if (!portno) portno = 1;
-    x->x_portno = portno;
-    x->x_open = 0;
-    return (x);
-}
-
-static void serial_setup(void)
-{
-    serial_class = class_new(gensym("serial"), (t_newmethod)serial_new, 0,
-        sizeof(t_serial), 0, A_DEFFLOAT, 0);
-    class_addfloat(serial_class, serial_float);
 }
 
 /* -------------------------- cputime ------------------------------ */
@@ -249,7 +208,7 @@ static void cputime_bang2(t_cputime *x)
     FILETIME ignorethis, ignorethat;
     LARGE_INTEGER usertime, kerneltime;
     BOOL retval;
-    
+
     retval = GetProcessTimes(GetCurrentProcess(), &ignorethis, &ignorethat,
         (FILETIME *)&kerneltime, (FILETIME *)&usertime);
     if (retval)
@@ -420,7 +379,7 @@ static void oscparse_list(t_oscparse *x, t_symbol *s, int argc, t_atom *argv)
     else outc += nfield;
     outv = (t_atom *)alloca(outc * sizeof(t_atom));
     dataonset = ROUNDUPTO4(i + 1);
-    /* post("outc %d, typeonset %d, dataonset %d, nfield %d", outc, typeonset, 
+    /* post("outc %d, typeonset %d, dataonset %d, nfield %d", outc, typeonset,
         dataonset, nfield); */
     for (i = j = 0; i < typeonset-1 && argv[i].a_w.w_float != 0 &&
         j < outc; j++)
@@ -492,9 +451,9 @@ static void oscparse_list(t_oscparse *x, t_symbol *s, int argc, t_atom *argv)
             k = ROUNDUPTO4(k);
             break;
         default:
-            pd_error(x, "oscparse: unknown tag '%c' (%d)", 
+            pd_error(x, "oscparse: unknown tag '%c' (%d)",
                 (int)(argv[i].a_w.w_float), (int)(argv[i].a_w.w_float));
-        } 
+        }
     }
     outlet_list(x->x_obj.ob_outlet, 0, j, outv);
     return;
@@ -523,14 +482,15 @@ typedef struct _oscformat
 {
     t_object x_obj;
     char *x_pathbuf;
-    int x_pathsize;
+    size_t x_pathsize;
     t_symbol *x_format;
 } t_oscformat;
 
 static void oscformat_set(t_oscformat *x, t_symbol *s, int argc, t_atom *argv)
 {
     char buf[MAXPDSTRING];
-    int i, newsize;
+    int i;
+    size_t newsize;
     *x->x_pathbuf = 0;
     buf[0] = '/';
     for (i = 0; i < argc; i++)
@@ -549,7 +509,7 @@ static void oscformat_set(t_oscformat *x, t_symbol *s, int argc, t_atom *argv)
 
 static void oscformat_format(t_oscformat *x, t_symbol *s)
 {
-    char *sp;
+    const char *sp;
     for (sp = s->s_name; *sp; sp++)
     {
         if (*sp != 'f' && *sp != 'i' && *sp != 's' && *sp != 'b')
@@ -588,7 +548,8 @@ static void oscformat_list(t_oscformat *x, t_symbol *s, int argc, t_atom *argv)
 {
     int typeindex = 0, j, msgindex, msgsize, datastart, ndata;
     t_atom *msg;
-    char *sp, *formatp = x->x_format->s_name, typecode;
+    const char *sp, *formatp = x->x_format->s_name;
+    char typecode;
         /* pass 1: go through args to find overall message size */
     for (j = ndata = 0, sp = formatp, msgindex = 0; j < argc;)
     {
@@ -598,16 +559,24 @@ static void oscformat_list(t_oscformat *x, t_symbol *s, int argc, t_atom *argv)
             typecode = 's';
         else typecode = 'f';
         if (typecode == 's')
-            msgindex += ROUNDUPTO4(strlen(argv[j].a_w.w_symbol->s_name) + 1);
+        {
+            if (argv[j].a_type == A_SYMBOL)
+                msgindex += ROUNDUPTO4(strlen(argv[j].a_w.w_symbol->s_name) + 1);
+            else
+            {
+                pd_error(x, "oscformat: expected symbol for argument %d", j+1);
+                return;
+            }
+        }
         else if (typecode == 'b')
         {
             int blobsize = 0x7fffffff, blobindex;
-                /* check if we have a nonnegative size field */ 
+                /* check if we have a nonnegative size field */
             if (argv[j].a_type == A_FLOAT &&
                 (int)(argv[j].a_w.w_float) >= 0)
                     blobsize = (int)(argv[j].a_w.w_float);
             if (blobsize > argc - j - 1)
-                blobsize = argc - j - 1;    /* if no or bad size, eat it all */ 
+                blobsize = argc - j - 1;    /* if no or bad size, eat it all */
             msgindex += 4 + ROUNDUPTO4(blobsize);
             j += blobsize;
         }
@@ -615,7 +584,7 @@ static void oscformat_list(t_oscformat *x, t_symbol *s, int argc, t_atom *argv)
         j++;
         ndata++;
     }
-    datastart = ROUNDUPTO4(strlen(x->x_pathbuf)+1) + ROUNDUPTO4(ndata + 2);
+    datastart = (int)(ROUNDUPTO4(strlen(x->x_pathbuf)+1) + ROUNDUPTO4(ndata + 2));
     msgsize = datastart + msgindex;
     msg = (t_atom *)alloca(msgsize * sizeof(t_atom));
     putstring(msg, &typeindex, x->x_pathbuf);
@@ -721,14 +690,179 @@ void oscformat_setup(void)
     class_addlist(oscformat_class, oscformat_list);
 }
 
+
+/* ---------- fudiparse - parse bytelists to to FUDI messages ----------------- */
+
+static t_class *fudiparse_class;
+
+typedef struct _fudiparse {
+  t_object  x_obj;
+  t_outlet *x_msgout;
+  char     *x_bytes;
+  size_t    x_numbytes;
+} t_fudiparse;
+
+static void fudiparse_binbufout(t_fudiparse *x, t_binbuf *b)
+{
+  int msg, natom = binbuf_getnatom(b);
+  t_atom *at = binbuf_getvec(b);
+  for (msg = 0; msg < natom;) {
+    int emsg;
+    for (emsg = msg; emsg < natom && at[emsg].a_type != A_COMMA
+           && at[emsg].a_type != A_SEMI; emsg++)
+      ;
+    if (emsg > msg) {
+      int i;
+      /* check for illegal atoms */
+      for (i = msg; i < emsg; i++)
+        if (at[i].a_type == A_DOLLAR || at[i].a_type == A_DOLLSYM) {
+          pd_error(x, "fudiparse: got dollar sign in message");
+          goto nodice;
+        }
+
+      if (at[msg].a_type == A_FLOAT) {
+        if (emsg > msg + 1)
+          outlet_list(x->x_msgout, 0, emsg-msg, at + msg);
+        else outlet_float(x->x_msgout, at[msg].a_w.w_float);
+      }
+      else if (at[msg].a_type == A_SYMBOL) {
+        outlet_anything(x->x_msgout, at[msg].a_w.w_symbol,
+                        emsg-msg-1, at + msg + 1);
+      }
+    }
+  nodice:
+    msg = emsg + 1;
+  }
+}
+static void fudiparse_list(t_fudiparse *x, t_symbol*s, int argc, t_atom*argv) {
+  size_t len = argc;
+  t_binbuf* bbuf = binbuf_new();
+  char*cbuf;
+  if((size_t)argc > x->x_numbytes) {
+    freebytes(x->x_bytes, x->x_numbytes);
+    x->x_numbytes = argc;
+    x->x_bytes = getbytes(x->x_numbytes);
+  }
+  cbuf = x->x_bytes;
+
+  while(argc--) {
+    char b = atom_getfloat(argv++);
+    *cbuf++ = b;
+  }
+  binbuf_text(bbuf, x->x_bytes, len);
+
+  fudiparse_binbufout(x, bbuf);
+
+  binbuf_free(bbuf);
+}
+
+static void fudiparse_free(t_fudiparse *x) {
+  freebytes(x->x_bytes, x->x_numbytes);
+  x->x_bytes = NULL;
+  x->x_numbytes = 0;
+}
+
+static void *fudiparse_new(void) {
+  t_fudiparse *x = (t_fudiparse *)pd_new(fudiparse_class);
+  x->x_msgout = outlet_new(&x->x_obj, 0);
+  x->x_numbytes = 1024;
+  x->x_bytes = getbytes(x->x_numbytes);
+  return (void *)x;
+}
+
+void fudiparse_setup(void) {
+  fudiparse_class = class_new(gensym("fudiparse"),
+                              (t_newmethod)fudiparse_new,
+                              (t_method)fudiparse_free,
+                              sizeof(t_fudiparse), CLASS_DEFAULT,
+                              0);
+  class_addlist(fudiparse_class, fudiparse_list);
+}
+/* --------- oscformat - format Pd (FUDI) messages to bytelists ------------ */
+
+static t_class *fudiformat_class;
+
+typedef struct _fudiformat {
+  t_object  x_obj;
+  t_outlet *x_msgout;
+  t_atom   *x_atoms;
+  size_t    x_numatoms;
+  int       x_udp;
+} t_fudiformat;
+
+static void fudiformat_any(t_fudiformat *x, t_symbol*s, int argc, t_atom*argv) {
+  char *buf;
+  int length;
+  int i;
+  t_atom at;
+  t_binbuf*bbuf = binbuf_new();
+  SETSYMBOL(&at, s);
+  binbuf_add(bbuf, 1, &at);
+
+  binbuf_add(bbuf, argc, argv);
+
+  if(!x->x_udp) {
+    SETSEMI(&at);
+    binbuf_add(bbuf, 1, &at);
+  }
+  binbuf_gettext(bbuf, &buf, &length);
+  binbuf_free(bbuf);
+
+  if((size_t)length>x->x_numatoms) {
+    freebytes(x->x_atoms, sizeof(*x->x_atoms) * x->x_numatoms);
+    x->x_numatoms = length;
+    x->x_atoms = getbytes(sizeof(*x->x_atoms) * x->x_numatoms);
+  }
+
+  for(i=0; i<length; i++) {
+    SETFLOAT(x->x_atoms+i, buf[i]);
+  }
+  freebytes(buf, length);
+  outlet_list(x->x_msgout, 0, length, x->x_atoms);
+}
+
+static void fudiformat_free(t_fudiformat *x) {
+  freebytes(x->x_atoms, sizeof(*x->x_atoms) * x->x_numatoms);
+  x->x_atoms = NULL;
+  x->x_numatoms = 0;
+}
+
+static void *fudiformat_new(t_symbol*s) {
+  t_fudiformat *x = (t_fudiformat *)pd_new(fudiformat_class);
+  x->x_msgout = outlet_new(&x->x_obj, 0);
+  x->x_numatoms = 1024;
+  x->x_atoms = getbytes(sizeof(*x->x_atoms) * x->x_numatoms);
+  if (gensym("-u") == s)
+    x->x_udp = 1;
+  else if (gensym("-t") == s)
+    x->x_udp = 0;
+  else if (gensym("") != s) {
+    pd_error(x, "fudiformat: unsupported mode '%s'", s->s_name);
+  }
+
+  return (void *)x;
+}
+
+static void fudiformat_setup(void) {
+  fudiformat_class = class_new(gensym("fudiformat"),
+                               (t_newmethod)fudiformat_new,
+                               (t_method)fudiformat_free,
+                               sizeof(t_fudiformat), CLASS_DEFAULT,
+                               A_DEFSYMBOL, 0);
+  class_addanything(fudiformat_class, fudiformat_any);
+}
+
+
+
 void x_misc_setup(void)
 {
     random_setup();
     loadbang_setup();
     namecanvas_setup();
-    serial_setup();
     cputime_setup();
     realtime_setup();
     oscparse_setup();
     oscformat_setup();
+    fudiparse_setup();
+    fudiformat_setup();
 }

@@ -18,10 +18,12 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdarg.h>
-#ifdef WIN32
-#include <malloc.h>
+#ifdef _WIN32
+# include <malloc.h> /* MSVC or mingw on windows */
+#elif defined(__linux__) || defined(__APPLE__)
+# include <alloca.h> /* linux, mac, mingw, cygwin */
 #else
-#include <alloca.h>
+# include <stdlib.h> /* BSDs for example */
 #endif
 
 #include "s_utf8.h"
@@ -78,11 +80,10 @@ int u8_utf8toucs2(uint16_t *dest, int sz, char *src, int srcsz)
         }
         ch = 0;
         switch (nb) {
-            /* these fall through deliberately */
-        case 3: ch += (unsigned char)*src++; ch <<= 6;
-        case 2: ch += (unsigned char)*src++; ch <<= 6;
-        case 1: ch += (unsigned char)*src++; ch <<= 6;
-        case 0: ch += (unsigned char)*src++;
+        case 3: ch += (unsigned char)*src++; ch <<= 6; /* falls through */
+        case 2: ch += (unsigned char)*src++; ch <<= 6; /* falls through */
+        case 1: ch += (unsigned char)*src++; ch <<= 6; /* falls through */
+        case 0: ch += (unsigned char)*src++; /* falls through */
         }
         ch -= offsetsFromUTF8[nb];
         dest[i++] = ch;

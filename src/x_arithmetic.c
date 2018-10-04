@@ -119,15 +119,16 @@ static void *binop1_pow_new(t_floatarg f)
 
 static void binop1_pow_bang(t_binop *x)
 {
-    outlet_float(x->x_obj.ob_outlet,
-        (x->x_f1 > 0 ? powf(x->x_f1, x->x_f2) : 0));
+    t_float r = (x->x_f1 == 0 && x->x_f2 < 0) ||
+        (x->x_f1 < 0 && (x->x_f2 - (int)x->x_f2) != 0) ?
+            0 : pow(x->x_f1, x->x_f2);
+    outlet_float(x->x_obj.ob_outlet, r);
 }
 
 static void binop1_pow_float(t_binop *x, t_float f)
 {
     x->x_f1 = f;
-    outlet_float(x->x_obj.ob_outlet,
-        (x->x_f1 > 0 ? powf(x->x_f1, x->x_f2) : 0));
+    binop1_pow_bang(x);
 }
 
 /* ------------------------ max -------------------------------- */
@@ -600,19 +601,30 @@ static void sqrt_float(t_object *x, t_float f)
     outlet_float(x->ob_outlet, r);
 }
 
-static t_class *log_class;      /* ----------- log --------------- */
+/* --------------------- log ------------------------------- */
 
-static void *log_new(void)
+static t_class *binop1_log_class;
+
+static void *binop1_log_new(t_floatarg f)
 {
-    t_object *x = (t_object *)pd_new(log_class);
-    outlet_new(x, &s_float);
-    return (x);
+    return (binop1_new(binop1_log_class, f));
 }
 
-static void log_float(t_object *x, t_float f)
+static void binop1_log_bang(t_binop *x)
 {
-    t_float r = (f > 0 ? logf(f) : -1000);
-    outlet_float(x->ob_outlet, r);
+    t_float r;
+    if (x->x_f1 <= 0)
+        r = -1000;
+    else if (x->x_f2 <= 0)
+        r = log(x->x_f1);
+    else r = log(x->x_f1)/log(x->x_f2);
+    outlet_float(x->x_obj.ob_outlet, r);
+}
+
+static void binop1_log_float(t_binop *x, t_float f)
+{
+    x->x_f1 = f;
+    binop1_log_bang(x);
 }
 
 static t_class *exp_class;      /* ----------- exp --------------- */
@@ -719,7 +731,7 @@ void x_arithmetic_setup(void)
     class_addbang(binop1_plus_class, binop1_plus_bang);
     class_addfloat(binop1_plus_class, (t_method)binop1_plus_float);
     class_sethelpsymbol(binop1_plus_class, binop1_sym);
-    
+
     binop1_minus_class = class_new(gensym("-"),
         (t_newmethod)binop1_minus_new, 0,
         sizeof(t_binop), 0, A_DEFFLOAT, 0);
@@ -761,6 +773,13 @@ void x_arithmetic_setup(void)
     class_addbang(binop1_min_class, binop1_min_bang);
     class_addfloat(binop1_min_class, (t_method)binop1_min_float);
     class_sethelpsymbol(binop1_min_class, binop1_sym);
+
+    binop1_log_class = class_new(gensym("log"),
+        (t_newmethod)binop1_log_new, 0,
+        sizeof(t_binop), 0, A_DEFFLOAT, 0);
+    class_addbang(binop1_log_class, binop1_log_bang);
+    class_addfloat(binop1_log_class, (t_method)binop1_log_float);
+    class_sethelpsymbol(binop1_log_class, math_sym);
 
         /* ------------------ binop2 ----------------------- */
 
@@ -857,17 +876,17 @@ void x_arithmetic_setup(void)
     class_sethelpsymbol(binop3_div_class, binop23_sym);
 
         /* ------------------- math functions --------------- */
-    
+
     sin_class = class_new(gensym("sin"), sin_new, 0,
         sizeof(t_object), 0, 0);
     class_addfloat(sin_class, (t_method)sin_float);
     class_sethelpsymbol(sin_class, math_sym);
-    
+
     cos_class = class_new(gensym("cos"), cos_new, 0,
         sizeof(t_object), 0, 0);
     class_addfloat(cos_class, (t_method)cos_float);
     class_sethelpsymbol(cos_class, math_sym);
-    
+
     tan_class = class_new(gensym("tan"), tan_new, 0,
         sizeof(t_object), 0, 0);
     class_addfloat(tan_class, (t_method)tan_float);
@@ -880,18 +899,13 @@ void x_arithmetic_setup(void)
 
     atan2_class = class_new(gensym("atan2"), atan2_new, 0,
         sizeof(t_atan2), 0, 0);
-    class_addfloat(atan2_class, (t_method)atan2_float);    
+    class_addfloat(atan2_class, (t_method)atan2_float);
     class_sethelpsymbol(atan2_class, math_sym);
 
     sqrt_class = class_new(gensym("sqrt"), sqrt_new, 0,
         sizeof(t_object), 0, 0);
     class_addfloat(sqrt_class, (t_method)sqrt_float);
     class_sethelpsymbol(sqrt_class, math_sym);
-
-    log_class = class_new(gensym("log"), log_new, 0,
-        sizeof(t_object), 0, 0);
-    class_addfloat(log_class, (t_method)log_float);    
-    class_sethelpsymbol(log_class, math_sym);
 
     exp_class = class_new(gensym("exp"), exp_new, 0,
         sizeof(t_object), 0, 0);
@@ -900,12 +914,12 @@ void x_arithmetic_setup(void)
 
     abs_class = class_new(gensym("abs"), abs_new, 0,
         sizeof(t_object), 0, 0);
-    class_addfloat(abs_class, (t_method)abs_float);    
+    class_addfloat(abs_class, (t_method)abs_float);
     class_sethelpsymbol(abs_class, math_sym);
 
     wrap_class = class_new(gensym("wrap"), wrap_new, 0,
         sizeof(t_object), 0, 0);
-    class_addfloat(wrap_class, (t_method)wrap_float);    
+    class_addfloat(wrap_class, (t_method)wrap_float);
     class_sethelpsymbol(wrap_class, math_sym);
 
 /* ------------------------  misc ------------------------ */
