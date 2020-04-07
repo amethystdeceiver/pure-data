@@ -30,7 +30,6 @@
 #endif
 
 extern t_class *vinlet_class, *voutlet_class, *canvas_class, *text_class;
-t_float *obj_findsignalscalar(t_object *x, int m);
 
 EXTERN_STRUCT _vinlet;
 EXTERN_STRUCT _voutlet;
@@ -62,7 +61,7 @@ struct _instanceugen
 
 #define THIS (pd_this->pd_ugen)
 
-void d_ugen_newpdinstance( void)
+void d_ugen_newpdinstance(void)
 {
     THIS = getbytes(sizeof(*THIS));
     THIS->u_dspchain = 0;
@@ -70,7 +69,7 @@ void d_ugen_newpdinstance( void)
     THIS->u_signals = 0;
 }
 
-void d_ugen_freepdinstance( void)
+void d_ugen_freepdinstance(void)
 {
     freebytes(THIS, sizeof(*THIS));
 }
@@ -414,7 +413,7 @@ int ilog2(int n)
 
 
     /* call this when DSP is stopped to free all the signals */
-void signal_cleanup(void)
+static void signal_cleanup(void)
 {
     t_signal *sig;
     int i;
@@ -481,7 +480,7 @@ void signal_makereusable(t_signal *sig)
     signal whose buffer and size will be obtained later via
     signal_setborrowed(). */
 
-t_signal *signal_new(int n, t_float sr)
+static t_signal *signal_new(int n, t_float sr)
 {
     int logn, vecsize = 0;
     t_signal *ret, **whichlist;
@@ -544,7 +543,7 @@ void signal_setborrowed(t_signal *sig, t_signal *sig2)
     if (THIS->u_loud) post("set borrowed %lx: %lx", sig, sig->s_vec);
 }
 
-int signal_compatible(t_signal *s1, t_signal *s2)
+static int signal_compatible(t_signal *s1, t_signal *s2)
 {
     return (s1->s_n == s2->s_n && s1->s_sr == s2->s_sr);
 }
@@ -1204,7 +1203,7 @@ void ugen_done_graph(t_dspcontext *dc)
 
 }
 
-t_signal *ugen_getiosig(int index, int inout)
+static t_signal *ugen_getiosig(int index, int inout)
 {
     if (!THIS->u_context) bug("ugen_getiosig");
     if (THIS->u_context->dc_toplevel) return (0);
